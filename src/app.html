@@ -6,7 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SoloStack</title>
     <style>
-      /* 全局：Soft UI 浅色主题，跟随系统亮色（标题栏/滚动条等系统控件用浅色） */
+      /* 全局背景：浅色默认；深色由 <html class="dark"> 驱动（与 app.css 的 :root.dark token 一致）。
+         首帧背景在这里写死，避免深色用户在应用启动前闪一下白屏。 */
       :root {
         color-scheme: light;
       }
@@ -19,10 +20,31 @@
         height: 100%;
         overflow: hidden;
       }
+      html.dark {
+        color-scheme: dark;
+      }
+      html.dark body {
+        background: #23262c;
+        color: #d8dbe1;
+      }
     </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <script>
+      // 首帧前读取主题并挂 html.dark，防止深色用户启动时闪白。
+      // 与 src/lib/stores.svelte.ts 的主题逻辑保持同一把 key。
+      (function () {
+        try {
+          var m = localStorage.getItem("solostack.theme") || "system";
+          var dark =
+            m === "dark" ||
+            (m === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

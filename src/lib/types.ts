@@ -2,6 +2,9 @@
 
 export type Status = "running" | "stopped" | "partial" | "error" | "not_installed";
 
+/** 外观主题模式：浅色 / 深色 / 跟随系统。 */
+export type ThemeMode = "light" | "dark" | "system";
+
 export interface WebUiUrl {
   name: string;
   url: string;

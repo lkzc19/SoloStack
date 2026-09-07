@@ -2,8 +2,9 @@
 @plugin "tailwindcss-animate";
 @custom-variant dark (&:is(.dark *));
 
-/* shadcn-svelte 主题令牌（浅色 slate + Vue 绿主色），挂 .app 使组件与现有 Soft UI 主色一致 */
-.app {
+/* shadcn-svelte 主题令牌（浅色 slate + Vue 绿主色）。挂 :root，
+   让 bits-ui 弹层（teleport 到 body）等脱离 .app 的元素也能继承 */
+:root {
   --background: oklch(1 0 0);
   --foreground: oklch(0.141 0.005 285.823);
   --card: oklch(1 0 0);
@@ -57,7 +58,7 @@
 }
 
 /* Soft UI 设计 Token（低饱和、柔和阴影、大圆角） */
-.app {
+:root {
   --bg: #ffffff;
   --panel: #ffffff;
   --text: #334155;
@@ -1028,6 +1029,113 @@ input[type="number"] {
 .install-line.done {
   color: #047857;
   font-weight: 600;
+}
+
+/* ── 深色主题（class 策略：`html.dark`，由 JS 在「浅/深/跟随系统」间切换）── */
+:root.dark {
+  color-scheme: dark;
+}
+
+/* shadcn 深色令牌：中性微冷灰（几乎无色相）+ 同款 Vue 绿主色 */
+:root.dark {
+  --background: oklch(0.27 0.006 260);
+  --foreground: oklch(0.97 0.003 260);
+  --card: oklch(0.32 0.006 260);
+  --card-foreground: oklch(0.97 0.003 260);
+  --popover: oklch(0.32 0.006 260);
+  --popover-foreground: oklch(0.97 0.003 260);
+  --primary: #42b883;
+  --primary-foreground: oklch(0.985 0.002 247);
+  --secondary: oklch(0.37 0.006 260);
+  --secondary-foreground: oklch(0.98 0.003 260);
+  --muted: oklch(0.37 0.006 260);
+  --muted-foreground: oklch(0.85 0.005 260);
+  --accent: oklch(0.37 0.006 260);
+  --accent-foreground: oklch(0.98 0.003 260);
+  --destructive: oklch(0.7 0.19 22);
+  --destructive-foreground: oklch(0.985 0.002 247);
+  --border: oklch(0.45 0.007 260);
+  --input: oklch(0.47 0.007 260);
+  --ring: #42b883;
+}
+
+/* Soft UI 深色设计令牌：中性灰、更浅一档，避免偏蓝偏黑 */
+:root.dark {
+  --bg: #23262c;
+  --panel: #2d3138;
+  --text: #d8dbe1;
+  --text-hi: #f5f6f8;
+  --muted: #a4aab4;
+  --primary: #42b883;
+  --primary-deep: #5adca9;
+  --accent: #f4b858;
+  --teal: #3ae3b2;
+  --red: #f28484;
+  --blue: #97bce3;
+  --line: #3f454f;
+  --radius: 10px;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.4);
+  --shadow-primary: 0 6px 20px rgba(66, 184, 131, 0.22);
+}
+
+/* 深色下对少量硬编码浅色的微调（随主题变量联动） */
+:root.dark body {
+  background: var(--bg);
+}
+:root.dark .component-logo {
+  background: #20242a;
+  color: #666c77;
+}
+:root.dark .component-logo.running,
+:root.dark .component-logo.partial {
+  color: #3ae3b2;
+}
+:root.dark .component-logo.error {
+  color: #f28484;
+}
+:root.dark .webui-badge {
+  background: rgba(164, 170, 180, 0.16);
+  color: #b2b8c1;
+}
+:root.dark .webui-badge.running,
+:root.dark .webui-badge.partial {
+  background: rgba(16, 185, 129, 0.16);
+  color: #3ae3b2;
+}
+:root.dark .webui-badge.error {
+  background: rgba(239, 68, 68, 0.16);
+  color: #f29d9d;
+}
+:root.dark .msg.error {
+  color: #f29d9d;
+  background: rgba(239, 68, 68, 0.16);
+}
+:root.dark .component-tab {
+  background: #383d46;
+  color: #b7bdc6;
+}
+:root.dark .component-tab:hover {
+  background: rgba(66, 184, 131, 0.16);
+  color: var(--primary-deep);
+}
+:root.dark .log-box {
+  background: #1d2128;
+  color: #cbd0d8;
+}
+:root.dark .log-box:focus-within {
+  background: #242a32;
+}
+:root.dark .select-tag {
+  color: #3ae3b2;
+  background: rgba(16, 185, 129, 0.15);
+}
+:root.dark .install-line.done {
+  color: #3ae3b2;
+}
+:root.dark .input:focus {
+  box-shadow: 0 0 0 3px rgba(66, 184, 131, 0.22);
 }
 
 /* 尊重减少动效偏好 */

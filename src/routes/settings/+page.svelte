@@ -8,7 +8,7 @@
   import Button from "$lib/components/ui/button/button.svelte";
   import DatePicker from "$lib/components/date-picker.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
-  import { store, flashSuccess, fmtBytes } from "$lib/stores.svelte.ts";
+  import { store, flashSuccess, fmtBytes, themeState, setThemeMode } from "$lib/stores.svelte.ts";
   import type { AppDef, DownloadPackageInfo, SettingsInfo } from "$lib/types";
 
   let settingsInfo = $state<SettingsInfo | null>(null);
@@ -23,7 +23,6 @@
   let cacheBusy = $state(false);
   let apps = $state<AppDef[]>([]);
   let logViewer = $state("");
-  let themeMode = $state<"light" | "dark" | "system">("system");
   let openEditor = $state(false);
   let openRefresh = $state(false);
 
@@ -212,29 +211,38 @@
         <div class="theme-tabs">
           <button
             class="settings-tab"
-            class:active={themeMode === "system"}
-            onclick={() => (themeMode = "system")}
+            class:active={themeState.mode === "system"}
+            onclick={() => setThemeMode("system")}
           >
             <Monitor size={14} />
             跟随系统
           </button>
           <button
             class="settings-tab"
-            class:active={themeMode === "light"}
-            onclick={() => (themeMode = "light")}
+            class:active={themeState.mode === "light"}
+            onclick={() => setThemeMode("light")}
           >
             <Sun size={14} />
             浅色
           </button>
           <button
             class="settings-tab"
-            class:active={themeMode === "dark"}
-            onclick={() => (themeMode = "dark")}
+            class:active={themeState.mode === "dark"}
+            onclick={() => setThemeMode("dark")}
           >
             <Moon size={14} />
             深色
           </button>
         </div>
+        <p class="editor-fallback">
+          {#if themeState.mode === "system"}
+            跟随 macOS 外观，切换系统外观时自动生效。
+          {:else if themeState.mode === "dark"}
+            已使用深色主题。
+          {:else}
+            已使用浅色主题。
+          {/if}
+        </p>
       </section>
       <section class="settings-section">
         <h2 class="settings-title">首选编辑器</h2>
