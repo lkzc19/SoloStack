@@ -1,0 +1,21 @@
+{
+  "display_name": "Kafka",
+  "category": "kafka",
+  "source": [
+    {
+      "name": "官方源",
+      "version": {
+        "4.1.0": "https://dlcdn.apache.org/kafka/4.1.0/kafka_2.13-4.1.0.tgz"
+      }
+    },
+    {
+      "name": "清华源",
+      "version": {
+        "4.1.0": "https://mirrors.tuna.tsinghua.edu.cn/apache/kafka/4.1.0/kafka_2.13-4.1.0.tgz"
+      }
+    }
+  ],
+  "java_support": {
+    "4.1.0": [11, 17, 21]
+  }
+}
