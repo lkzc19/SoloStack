@@ -32,6 +32,17 @@
   const triggerClass = $derived(cls.replace("full", "w-full"));
 
   let open = $state(false);
+  let triggerRef = $state<HTMLElement | null>(null);
+  let contentStyle = $state("");
+
+  // 下拉弹层与触发器等宽，保证与同表单里的输入框对齐
+  $effect(() => {
+    if (open && triggerRef) {
+      contentStyle = `width:${Math.round(triggerRef.offsetWidth)}px`;
+    } else {
+      contentStyle = "";
+    }
+  });
 
   function pick(it: Item) {
     if (it.disabled) return;
@@ -42,7 +53,13 @@
 
 <Popover.Root bind:open>
   <Popover.Trigger>
-    <Button variant="outline" size="md" type="button" class={triggerClass}>
+    <Button
+      variant="outline"
+      size="md"
+      type="button"
+      class={triggerClass}
+      bind:ref={triggerRef}
+    >
       {#if selected?.icon}
         <img class="select-item-icon" src={`/icons/${selected.icon}.png`} alt="" />
       {/if}
@@ -53,7 +70,13 @@
       <ChevronDown size={14} class="select-chev" />
     </Button>
   </Popover.Trigger>
-  <Popover.Content side="bottom" align={align} sideOffset={6} class="toolbar-menu">
+  <Popover.Content
+    side="bottom"
+    align={align}
+    sideOffset={6}
+    class="toolbar-menu"
+    style={contentStyle}
+  >
     {#each items as it (it.value)}
       <button
         class="toolbar-menu-item"

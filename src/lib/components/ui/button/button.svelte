@@ -11,6 +11,7 @@
     class: cls = "",
     children,
     type = "button",
+    ref = $bindable(null),
     ...rest
   }: {
     variant?: "default" | "destructive" | "outline" | "secondary" | "ghost";
@@ -18,6 +19,7 @@
     class?: string;
     children?: Snippet;
     type?: "button" | "submit" | "reset";
+    ref?: HTMLElement | null;
   } & HTMLButtonAttributes = $props();
 
   const variants: Record<string, string> = {
@@ -40,6 +42,7 @@
 
 <BitsButton.Root
   {type}
+  bind:ref={ref}
   {...rest}
   class={cn(
     "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",

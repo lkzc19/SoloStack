@@ -228,7 +228,8 @@ export interface InstallParams {
   version: string;
   sourceId: string;
   jdkVersion: string;
-  ports: { namenode_web: number; yarn_rm: number; history_enabled: boolean; history_web_port: number } | null;
+  /// 组件自定义安装参数（id → 字符串值）；留空的项由组件回退默认值
+  params: Record<string, string> | null;
 }
 
 export async function doInstall(params: InstallParams) {
@@ -247,7 +248,7 @@ export async function doInstall(params: InstallParams) {
       version: params.version,
       sourceId: params.sourceId,
       jdkVersion: params.jdkVersion,
-      ports: params.ports,
+      params: params.params,
     });
     store.installDone = true;
     await refreshComponents();

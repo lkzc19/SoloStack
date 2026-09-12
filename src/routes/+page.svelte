@@ -2,7 +2,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { goto } from "$app/navigation";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { onMount } from "svelte";
   import {
     AlertCircle,
     Database,
@@ -25,16 +24,21 @@
 
   let webUis = $state<Record<string, WebUiUrl[]>>({});
 
-  onMount(() => {
-    loadWebUis();
+  // 组件列表就绪后逐个拉取各自的 WebUI 入口（已拉过的不重复）
+  $effect(() => {
+    for (const c of store.components) {
+      if (!(c.name in webUis)) {
+        void loadWebUis(c.name);
+      }
+    }
   });
 
-  async function loadWebUis() {
+  async function loadWebUis(name: string) {
     try {
-      const urls = await invoke<WebUiUrl[]>("get_web_ui_urls", { component: "hadoop" });
-      webUis = { hadoop: urls };
+      const urls = await invoke<WebUiUrl[]>("get_web_ui_urls", { component: name });
+      webUis[name] = urls;
     } catch {
-      /* 未安装 hadoop 时静默 */
+      /* 该组件无 WebUI 或尚未就绪时静默 */
     }
   }
 
@@ -113,9 +117,9 @@
         <div class="component-info">
           <div class="component-title-row">
             <span class="component-name">{component.display_name || component.name}</span>
-            {#if component.name === "hadoop" && webUis.hadoop?.length}
+            {#if webUis[component.name]?.length}
               <span class="webui-sep">|</span>
-              {#each webUis.hadoop as wu (wu.name)}
+              {#each webUis[component.name] as wu (wu.name)}
                 <button class="webui-badge {component.status}" onclick={() => openWebUi(wu.url)} title={`打开 ${wu.name} WebUI`}>
                   {wu.name}
                 </button>

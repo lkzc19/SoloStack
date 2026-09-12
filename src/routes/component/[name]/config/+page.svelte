@@ -16,17 +16,16 @@
   } from "$lib/stores.svelte.ts";
   import type { JdkInfo } from "$lib/types";
 
-  interface ConfigField {
+  interface FieldValue {
     id: string;
-    label: string;
-    value_type: string; // "port" | "version"
     value: string;
   }
 
   const name = $derived(page.params.name ?? "");
   const selected = $derived(getSelected());
 
-  let fields = $state<ConfigField[]>([]);
+  // 后端只返回「字段当前值」；表单结构/文案/布局完全由前端定义
+  let fields = $state<FieldValue[]>([]);
   let jdks = $state<JdkInfo[]>([]);
   let saving = $state(false);
   let showSaveConfirm = $state(false);
@@ -37,13 +36,19 @@
     selected !== null && (selected.status === "running" || selected.status === "partial")
   );
 
-  // 列出本机所有 JDK 发行版；value 用目录名（唯一，避免 key 重复）
+  // 本机所有 JDK（value = 目录名）
   const jdkItems = $derived(
-    jdks.map((j) => ({
-      value: j.name,
-      label: `${j.vendor} JDK ${j.version}`,
-    }))
+    jdks.map((j) => ({ value: j.name, label: `${j.vendor} JDK ${j.version}` }))
   );
+
+  // 单条消息上限档位（前端定义；后端校验是否接受）
+  const kafkaMsgItems = [
+    { value: "1", label: "1 MB（默认）" },
+    { value: "10", label: "10 MB" },
+    { value: "50", label: "50 MB" },
+    { value: "100", label: "100 MB" },
+    { value: "500", label: "500 MB" },
+  ];
 
   onMount(() => {
     store.selectedName = name;
@@ -53,7 +58,7 @@
 
   async function loadFields(component: string) {
     try {
-      fields = await invoke<ConfigField[]>("list_config_fields", { component });
+      fields = await invoke<FieldValue[]>("list_config_fields", { component });
     } catch (e) {
       store.errorMsg = String(e);
     }
@@ -67,15 +72,12 @@
     }
   }
 
-  function updateField(id: string, value: string) {
-    fields = fields.map((f) => (f.id === id ? { ...f, value } : f));
-  }
-
-  function fieldValue(id: string) {
+  function valueOf(id: string) {
     return fields.find((f) => f.id === id)?.value ?? "";
   }
-  function fieldLabel(id: string) {
-    return fields.find((f) => f.id === id)?.label ?? "";
+
+  function updateField(id: string, value: string) {
+    fields = fields.map((f) => (f.id === id ? { ...f, value } : f));
   }
 
   async function doSaveConfig() {
@@ -86,13 +88,15 @@
     const wasRunning = isRunning;
     try {
       for (const f of fields) {
+        // JDK 未解析出来时下拉是空的：空值提交必然失败并中断整次保存（后续字段不再写、
+        // 也不会重启组件），而它本身没有要改的内容，直接跳过。
+        if (f.id === "jdk_version" && !f.value.trim()) continue;
         await invoke("set_config_field", {
           component: name,
           fieldId: f.id,
           value: f.value,
         });
       }
-      // 组件在运行时，保存后自动重启
       if (wasRunning) {
         await stopComponent(name);
         await startComponent(name);
@@ -123,78 +127,128 @@
 <div class="settings-view">
   <div class="page-body">
     {#if name === "hadoop"}
+      <!-- Hadoop 显式表单（前端决定布局与文案） -->
       <div class="field-item">
-        <span class="field-label">{fieldLabel("jdk_version")}</span>
+        <span class="field-label">JDK 版本</span>
         <Select
-          class="full"
-          value={fieldValue("jdk_version")}
+          class="full field-select"
+          value={valueOf("jdk_version")}
           items={jdkItems}
           onSelect={(v) => updateField("jdk_version", v)}
         />
       </div>
       <div class="field-pair">
         <div class="field-item">
-          <span class="field-label">{fieldLabel("namenode_web_port")}</span>
+          <span class="field-label">HDFS WebUI 端口</span>
           <input
             class="input mono"
             type="number"
-            value={fieldValue("namenode_web_port")}
+            min="1024"
+            max="65535"
+            value={valueOf("namenode_web_port")}
             oninput={(e) => updateField("namenode_web_port", (e.currentTarget as HTMLInputElement).value)}
           />
         </div>
         <div class="field-item">
-          <span class="field-label">{fieldLabel("yarn_rm_web_port")}</span>
+          <span class="field-label">YARN WebUI 端口</span>
           <input
             class="input mono"
             type="number"
-            value={fieldValue("yarn_rm_web_port")}
+            min="1024"
+            max="65535"
+            value={valueOf("yarn_rm_web_port")}
             oninput={(e) => updateField("yarn_rm_web_port", (e.currentTarget as HTMLInputElement).value)}
           />
         </div>
       </div>
       <div class="field-pair">
         <div class="field-item">
-          <span class="field-label">{fieldLabel("history_enabled")}</span>
+          <span class="field-label">JobHistory</span>
           <Switch
-            checked={fieldValue("history_enabled") === "true"}
+            checked={valueOf("history_enabled") === "true"}
             onCheckedChange={(v) => updateField("history_enabled", v ? "true" : "false")}
           />
         </div>
-        <div class="field-item history-port-field" class:on={fieldValue("history_enabled") === "true"}>
-          <span class="field-label">{fieldLabel("history_web_port")}</span>
-          <input
-            class="input mono"
-            type="number"
-            value={fieldValue("history_web_port")}
-            oninput={(e) => updateField("history_web_port", (e.currentTarget as HTMLInputElement).value)}
-          />
-        </div>
-      </div>
-    {:else}
-      {#each fields as field (field.id)}
-        <div class="field-item">
-          <span class="field-label">{field.label}</span>
-          {#if field.value_type === "version"}
-            <Select
-              class="full"
-              value={field.value}
-              items={jdkItems}
-              onSelect={(v) => updateField(field.id, v)}
-            />
-          {:else}
+        {#if valueOf("history_enabled") === "true"}
+          <div class="field-item">
+            <span class="field-label">JobHistory WebUI 端口</span>
             <input
               class="input mono"
               type="number"
-              value={field.value}
-              oninput={(e) => updateField(field.id, (e.currentTarget as HTMLInputElement).value)}
+              min="1024"
+              max="65535"
+              value={valueOf("history_web_port")}
+              oninput={(e) => updateField("history_web_port", (e.currentTarget as HTMLInputElement).value)}
             />
-          {/if}
+          </div>
+        {/if}
+      </div>
+    {:else if name === "kafka"}
+      <!-- Kafka 显式表单 -->
+      <div class="field-pair">
+        <div class="field-item">
+          <span class="field-label">Broker 端口</span>
+          <input
+            class="input mono"
+            type="number"
+            min="1024"
+            max="65535"
+            value={valueOf("broker_port")}
+            oninput={(e) => updateField("broker_port", (e.currentTarget as HTMLInputElement).value)}
+          />
         </div>
-      {/each}
+        <div class="field-item">
+          <span class="field-label">默认分区数</span>
+          <input
+            class="input mono"
+            type="number"
+            value={valueOf("num_partitions")}
+            oninput={(e) => updateField("num_partitions", (e.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+      </div>
+      <div class="field-pair">
+        <div class="field-item">
+          <span class="field-label">消息保留时长（小时）</span>
+          <input
+            class="input mono"
+            type="number"
+            value={valueOf("retention_hours")}
+            oninput={(e) => updateField("retention_hours", (e.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field-item">
+          <span class="field-label">单条消息上限</span>
+          <Select
+            class="full field-select"
+            value={valueOf("message_max_mb")}
+            items={kafkaMsgItems}
+            onSelect={(v) => updateField("message_max_mb", v)}
+          />
+        </div>
+      </div>
+      <div class="field-item">
+        <span class="field-label">自动创建 Topic</span>
+        <Switch
+          checked={valueOf("auto_create_topics") === "true"}
+          onCheckedChange={(v) => updateField("auto_create_topics", v ? "true" : "false")}
+        />
+      </div>
+      <div class="field-item">
+        <span class="field-label">JDK 版本</span>
+        <Select
+          class="full field-select"
+          value={valueOf("jdk_version")}
+          items={jdkItems}
+          onSelect={(v) => updateField("jdk_version", v)}
+        />
+      </div>
+    {:else}
+      <p class="hint">该组件没有可配置的字段。</p>
     {/if}
 
-    {#if fields.length === 0}
-      <p class="hint">该组件没有可配置的字段。</p>
+    {#if fields.length === 0 && (name === "hadoop" || name === "kafka")}
+      <p class="hint">加载字段失败或组件未就绪。</p>
     {/if}
 
     <p class="hint-inline">保存后若进程正在运行，需重启组件生效。</p>

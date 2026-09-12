@@ -18,7 +18,6 @@ export interface ComponentInfo {
   name: string;
   version: string;
   display_name: string;
-  category: string;
   installed: boolean;
 }
 
@@ -47,8 +46,14 @@ export interface InstallSource {
   versions: Record<string, string>;
 }
 
-export interface ComponentConfigInfo {
+/** 一个安装参数的声明（id + 默认值）；布局与文案由前端按组件定制 */
+export interface InstallParam {
   id: string;
+  default: string;
+}
+
+export interface ManifestInfo {
+  component: string;
   source: InstallSource[];
   java_support: Record<string, number[]>;
 }
@@ -79,7 +84,8 @@ export interface AppDef {
 
 export interface ComponentDirs {
   instance: string;
-  etc: string;
+  /** 组件官方配置目录（配置就地写在实例内，不再是副本） */
+  config: string;
   data: string;
   log: string;
 }

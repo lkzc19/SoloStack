@@ -588,6 +588,24 @@ input[type="number"] {
   border-radius: var(--radius);
   box-shadow: var(--shadow-md);
   z-index: 60;
+  /* 最多展示 5 项，超出滚轮滚动 */
+  max-height: 176px;
+  overflow-y: auto;
+}
+/* 下拉触发器对齐输入框：与 .input 同底/边框/圆角/字号/高度 */
+.field-select {
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.field-select:hover {
+  border-color: var(--primary);
+  color: var(--text);
 }
 .toolbar-menu-item {
   display: flex;
@@ -754,7 +772,8 @@ input[type="number"] {
   border-radius: 12px;
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg);
+  /* 与外观主题的分段控件（.theme-tabs）一致：卡片底上浮一层控件底色 */
+  background: var(--panel);
 }
 .settings-tab {
   flex: 1;
@@ -978,6 +997,7 @@ input[type="number"] {
 .component-tab.active {
   background: var(--primary);
   color: #ffffff;
+  font-weight: 600;
   box-shadow: 0 4px 14px rgba(66, 184, 131, 0.3);
 }
 
@@ -1113,12 +1133,20 @@ input[type="number"] {
   background: rgba(239, 68, 68, 0.16);
 }
 :root.dark .component-tab {
-  background: #383d46;
-  color: #b7bdc6;
+  background: #2a2f37;
+  color: #9aa1ab;
 }
 :root.dark .component-tab:hover {
   background: rgba(66, 184, 131, 0.16);
   color: var(--primary-deep);
+}
+:root.dark .component-tab.active {
+  /* 深色基础规则（.component-tab 暗底）优先级高于浅色 .active，
+     必须显式恢复选中视觉；去掉绿色光晕避免突兀 */
+  background: var(--primary);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: none;
 }
 :root.dark .log-box {
   background: #1d2128;
