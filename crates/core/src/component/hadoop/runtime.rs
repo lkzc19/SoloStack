@@ -13,14 +13,14 @@ impl Runtime for Hadoop {
             &format!("启动组件 {NAME} v{version}"),
         );
         format_namenode_if_needed(version)?;
-        run(version, "sbin/start-dfs.sh", &[])?;
-        run(version, "sbin/start-yarn.sh", &[])?;
+        // 直接用 --daemon 启动各进程，绕过 start-dfs/start-yarn 内部的 SSH 依赖。
+        // 顺序：namenode → datanode → resourcemanager → nodemanager → historyserver
+        run_daemon(version, "bin/hdfs", &["--daemon", "start", "namenode"])?;
+        run_daemon(version, "bin/hdfs", &["--daemon", "start", "datanode"])?;
+        run_daemon(version, "bin/yarn", &["--daemon", "start", "resourcemanager"])?;
+        run_daemon(version, "bin/yarn", &["--daemon", "start", "nodemanager"])?;
         if config::history_enabled(version) {
-            run(
-                version,
-                "bin/mapred",
-                &["--daemon", "start", "historyserver"],
-            )?;
+            run_daemon(version, "bin/mapred", &["--daemon", "start", "historyserver"])?;
         }
         Ok(())
     }
@@ -30,15 +30,14 @@ impl Runtime for Hadoop {
             crate::app::app_log::INFO,
             &format!("停止组件 {NAME} v{version}"),
         );
+        // 逆序停止：historyserver → nodemanager → resourcemanager → datanode → namenode
         if config::history_enabled(version) {
-            run(
-                version,
-                "bin/mapred",
-                &["--daemon", "stop", "historyserver"],
-            )?;
+            run_daemon(version, "bin/mapred", &["--daemon", "stop", "historyserver"])?;
         }
-        run(version, "sbin/stop-yarn.sh", &[])?;
-        run(version, "sbin/stop-dfs.sh", &[])?;
+        run_daemon(version, "bin/yarn", &["--daemon", "stop", "nodemanager"])?;
+        run_daemon(version, "bin/yarn", &["--daemon", "stop", "resourcemanager"])?;
+        run_daemon(version, "bin/hdfs", &["--daemon", "stop", "datanode"])?;
+        run_daemon(version, "bin/hdfs", &["--daemon", "stop", "namenode"])?;
         Ok(())
     }
 
@@ -98,7 +97,7 @@ fn format_namenode_if_needed(version: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 运行组件脚本（注入 JAVA_HOME + HADOOP_CONF_DIR，随子进程结束失效）。
+/// 运行组件脚本并等待结束（用于格式化等同步操作）。
 fn run(version: &str, script: &str, args: &[&str]) -> Result<std::process::Child, String> {
     let conf = component::config_dir(NAME, version)?.display().to_string();
     exec::run_script(
@@ -108,6 +107,24 @@ fn run(version: &str, script: &str, args: &[&str]) -> Result<std::process::Child
         args,
         &[("HADOOP_CONF_DIR", &conf)],
     )
+}
+
+/// 以 `--daemon` 模式运行组件脚本：等待命令退出并检查退出码。
+///
+/// `hdfs/yarn/mapred --daemon start/stop` 会 fork 到后台后立即退出，
+/// 不依赖 SSH，适合纯本机伪分布式场景。
+fn run_daemon(version: &str, script: &str, args: &[&str]) -> Result<(), String> {
+    let mut child = run(version, script, args)?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("等待 {script} {} 失败: {e}", args.join(" ")))?;
+    if !status.success() {
+        return Err(format!(
+            "{script} {} 失败（退出码 {status}）",
+            args.join(" ")
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

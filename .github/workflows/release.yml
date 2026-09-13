@@ -1,0 +1,119 @@
+name: release
+
+# 打 tag 触发（如 v0.1.0）或手动触发：测试 → 构建 → 创建 GitHub Release（草稿）并挂上 dmg。
+#
+# 注意：tag 必须与 src-tauri/tauri.conf.json 的 version 一致，否则产物版本号与 Release 对不上。
+# 想先验证流水线，可以推一个临时 tag（如 v0.1.0-test），验证完删掉 tag 与 Release 即可。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # 手动触发（Actions 页面点 Run workflow）
+    inputs:
+      tag:
+        description: "版本号（如 v0.1.0），留空则用 tauri.conf.json 的版本"
+        required: false
+        type: string
+
+permissions:
+  contents: write # 创建 Release / 上传产物需要写权限
+
+jobs:
+  # 解析版本号：tag push 用 ref_name，手动触发用 input 或 tauri.conf.json
+  resolve:
+    runs-on: macos-14
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="v$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"\([0-9][0-9.]*\)".*/\1/')"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
+  # 确保 tag 来自 main 分支，其他分支打的 tag 不出包
+  guard:
+    needs: resolve
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整历史来判断 tag 是否在 main 上
+      - name: Verify commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::当前 commit 不在 main 分支上，跳过 release"
+            exit 1
+          fi
+
+  # 测试挂了就不出包
+  test:
+    needs: guard
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - run: cargo test --workspace
+      - run: npm run check # svelte-check
+
+  build:
+    needs: [resolve, test]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 显式交叉编译到 aarch64：即使 runner 是 Intel 也能出 Apple Silicon 的包
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ── 签名与公证（买了 Apple 开发者账号后再启用）────────────────────
+          # 在仓库 Settings → Secrets and variables → Actions 里配好下面这些，
+          # 去掉注释即可自动签名 + 公证，产物变成「双击即开」：
+          #
+          #   APPLE_CERTIFICATE            Developer ID Application 证书（.p12 的 base64）
+          #   APPLE_CERTIFICATE_PASSWORD   导出 .p12 时设的密码
+          #   APPLE_SIGNING_IDENTITY       "Developer ID Application: <你的名字> (TEAMID)"
+          #   APPLE_ID                     你的 Apple ID
+          #   APPLE_PASSWORD               App 专用密码（不是账号密码）
+          #   APPLE_TEAM_ID                团队 ID
+          #
+          # 注意：**不要**把没配好的变量以空字符串传进来 —— Tauri 见到空的
+          # APPLE_CERTIFICATE 会当成「要签名却没有证书」而直接报错。
+          #
+          # 未签名时产物仍可分发，但对方需要右键「打开」或执行：
+          #   xattr -dr com.apple.quarantine /Applications/solostack.app
+        with:
+          tagName: ${{ needs.resolve.outputs.tag }}
+          releaseName: "SoloStack ${{ needs.resolve.outputs.tag }}"
+          releaseDraft: true # 先出草稿，确认无误再手动发布
+          prerelease: false
+          args: --target aarch64-apple-darwin

@@ -29,18 +29,22 @@ pub fn get_component_status(component: String) -> Result<ComponentStatusInfo, St
     })
 }
 
-/// 启动组件（全启）。
+/// 启动组件（全启）。后台线程执行，避免格式化/启停序列阻塞 UI。
 #[tauri::command]
-pub fn start_component(component: String, _service: Option<String>) -> Result<(), String> {
+pub async fn start_component(component: String, _service: Option<String>) -> Result<(), String> {
     let i = resolve(&component)?;
-    service::start(&i.name, &i.version)
+    tauri::async_runtime::spawn_blocking(move || service::start(&i.name, &i.version))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
-/// 停止组件（全停）。
+/// 停止组件（全停）。后台线程执行，避免启停序列阻塞 UI。
 #[tauri::command]
-pub fn stop_component(component: String, _service: Option<String>) -> Result<(), String> {
+pub async fn stop_component(component: String, _service: Option<String>) -> Result<(), String> {
     let i = resolve(&component)?;
-    service::stop(&i.name, &i.version)
+    tauri::async_runtime::spawn_blocking(move || service::stop(&i.name, &i.version))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 获取组件的 WebUI 跳转地址（由组件的 Runtime::web_uis 提供）。

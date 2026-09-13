@@ -57,10 +57,21 @@ mod tests {
         assert!(names.contains(&"Sublime Text"));
     }
 
+    /// 环境相关，只验证「机制不崩、结果都在白名单内」。
+    ///
+    /// 不再硬断言「系统自带 TextEdit」：探测走 Spotlight（`mdfind`），
+    /// CI runner 上索引常常未就绪、返回空是正常的，硬断言会让流水线红掉。
+    /// （与 `platform::jdk` 的测试同一原则：找到多少取决于机器环境。）
     #[test]
-    fn textedit_installed_on_macos() {
-        if cfg!(target_os = "macos") {
-            assert!(is_installed("com.apple.TextEdit"), "系统应自带 TextEdit");
+    fn list_available_apps_is_whitelisted_and_non_panicking() {
+        let apps = list_available_apps();
+        let known: Vec<&str> = WHITELIST.iter().map(|(_, id, _)| *id).collect();
+        for app in &apps {
+            assert!(
+                known.contains(&app.bundle_id.as_str()),
+                "返回了白名单之外的条目: {}",
+                app.bundle_id
+            );
         }
     }
 }

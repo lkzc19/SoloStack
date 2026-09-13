@@ -185,6 +185,15 @@
       </div>
     {:else if name === "kafka"}
       <!-- Kafka 显式表单 -->
+      <div class="field-item">
+        <span class="field-label">JDK 版本</span>
+        <Select
+          class="full field-select"
+          value={valueOf("jdk_version")}
+          items={jdkItems}
+          onSelect={(v) => updateField("jdk_version", v)}
+        />
+      </div>
       <div class="field-pair">
         <div class="field-item">
           <span class="field-label">Broker 端口</span>
@@ -232,15 +241,6 @@
         <Switch
           checked={valueOf("auto_create_topics") === "true"}
           onCheckedChange={(v) => updateField("auto_create_topics", v ? "true" : "false")}
-        />
-      </div>
-      <div class="field-item">
-        <span class="field-label">JDK 版本</span>
-        <Select
-          class="full field-select"
-          value={valueOf("jdk_version")}
-          items={jdkItems}
-          onSelect={(v) => updateField("jdk_version", v)}
         />
       </div>
     {:else}
