@@ -11,16 +11,32 @@
 //! | `commands::logs` | 组件日志：列出、按路径读尾部 |
 
 mod commands;
+mod tray;
 
 use commands::{app, component, install, logs};
+use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
             let _ = solostack_core::app::paths::migrate_legacy_layout();
+            tray::setup(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let close_to_tray = solostack_core::app::settings::Settings::load()
+                    .map(|settings| settings.close_to_tray)
+                    .unwrap_or(true);
+                api.prevent_close();
+                if close_to_tray {
+                    tray::hide_main_window(window.app_handle());
+                } else {
+                    window.app_handle().exit(0);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             app::get_arch,
@@ -29,6 +45,7 @@ pub fn run() {
             app::get_app_logs,
             app::list_log_dates,
             app::get_settings,
+            app::set_close_to_tray,
             app::list_apps,
             app::set_log_viewer,
             app::open_log_file,

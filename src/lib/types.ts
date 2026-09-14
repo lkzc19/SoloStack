@@ -39,6 +39,7 @@ export interface LogEntry {
 export interface SettingsInfo {
   data_root: string;
   log_viewer: string;
+  close_to_tray: boolean;
 }
 
 export interface InstallSource {

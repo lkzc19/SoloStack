@@ -23,6 +23,7 @@ pub fn get_settings() -> Result<SettingsInfo, String> {
     Ok(SettingsInfo {
         data_root: root.display().to_string(),
         log_viewer: settings.log_viewer,
+        close_to_tray: settings.close_to_tray,
     })
 }
 
@@ -38,6 +39,15 @@ pub fn set_log_viewer(app: String) -> Result<(), String> {
     let mut settings =
         solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     settings.log_viewer = app;
+    settings.save().map_err(|e| e.to_string())
+}
+
+/// 设置点击关闭按钮时是否最小化到托盘。
+#[tauri::command]
+pub fn set_close_to_tray(close_to_tray: bool) -> Result<(), String> {
+    let mut settings =
+        solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
+    settings.close_to_tray = close_to_tray;
     settings.save().map_err(|e| e.to_string())
 }
 
@@ -98,6 +108,7 @@ pub fn list_jdk_versions() -> Vec<JdkInfo> {
 pub struct SettingsInfo {
     data_root: String,
     log_viewer: String,
+    close_to_tray: bool,
 }
 
 /// 本机 JDK（GUI 展示）。

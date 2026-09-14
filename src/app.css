@@ -63,6 +63,7 @@
   --panel: #ffffff;
   --text: #334155;
   --text-hi: #1f2937;
+  --heading: #0f172a;
   --muted: #64748b;
   --primary: #42b883;
   --primary-deep: #33a06b;
@@ -798,9 +799,9 @@ input[type="number"] {
   margin: 0 0 0.2rem;
   font-family: var(--font-display);
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   letter-spacing: 0.06em;
-  color: var(--text-hi);
+  color: var(--heading);
 }
 .settings-desc {
   margin: 0 0 0.6rem;
@@ -919,6 +920,60 @@ input[type="number"] {
 
 .settings-section {
   margin-bottom: 2rem;
+}
+.settings-divider {
+  height: 0;
+  margin: 10px 0 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  opacity: 0.65;
+}
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 68px;
+  padding: 15px 14px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.settings-toggle-content {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+.settings-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--blue);
+}
+.settings-toggle-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.settings-toggle-label {
+  color: var(--heading);
+  font-size: 13px;
+  line-height: 1.2;
+}
+.settings-toggle-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 /* ── 缓存 tab ── */
 .cache-toolbar {
@@ -1085,6 +1140,7 @@ input[type="number"] {
   --panel: #2d3138;
   --text: #d8dbe1;
   --text-hi: #f5f6f8;
+  --heading: #ffffff;
   --muted: #a4aab4;
   --primary: #42b883;
   --primary-deep: #5adca9;

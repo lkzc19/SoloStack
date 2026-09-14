@@ -8,18 +8,26 @@ pub struct Settings {
     /// 打开日志文件的默认应用 Bundle ID（默认 macOS 自带文本编辑器 TextEdit）。
     #[serde(default = "default_log_viewer")]
     pub log_viewer: String,
+    /// 点击关闭按钮时是否仅隐藏窗口并保留托盘进程。
+    #[serde(default = "default_close_to_tray")]
+    pub close_to_tray: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             log_viewer: default_log_viewer(),
+            close_to_tray: default_close_to_tray(),
         }
     }
 }
 
 fn default_log_viewer() -> String {
     "com.apple.TextEdit".to_string()
+}
+
+fn default_close_to_tray() -> bool {
+    true
 }
 
 impl Settings {
@@ -57,6 +65,7 @@ mod tests {
     fn default_settings_has_textedit() {
         let s = Settings::default();
         assert_eq!(s.log_viewer, "com.apple.TextEdit");
+        assert!(s.close_to_tray, "默认关闭窗口时最小化到托盘");
     }
 
     /// 存了再读必须拿到同一个值 —— 这条往返路径曾因 save 写根目录、load 读 app/
@@ -71,10 +80,13 @@ mod tests {
 
         let s = Settings {
             log_viewer: "com.sublimetext.4".into(),
+            close_to_tray: false,
         };
         s.save().unwrap();
 
-        assert_eq!(Settings::load().unwrap().log_viewer, "com.sublimetext.4");
+        let loaded = Settings::load().unwrap();
+        assert_eq!(loaded.log_viewer, "com.sublimetext.4");
+        assert!(!loaded.close_to_tray);
         assert!(
             tmp.join(".solostack/app/settings.json").is_file(),
             "必须写在 app/（load 读的位置）"
@@ -97,5 +109,23 @@ mod tests {
 
         let s = Settings::load().unwrap();
         assert_eq!(s, Settings::default());
+    }
+
+    #[test]
+    fn load_legacy_settings_defaults_close_to_tray() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-settings-legacy-tray");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let path = paths::settings_file().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"log_viewer":"com.apple.TextEdit"}"#).unwrap();
+
+        let settings = Settings::load().unwrap();
+        assert!(settings.close_to_tray, "旧设置缺少字段时应默认最小化到托盘");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -4,10 +4,11 @@
   import { Folder } from "lucide-svelte";
   import { onMount } from "svelte";
   import { Popover } from "bits-ui";
-  import { Check, ChevronDown, ExternalLink, Globe, Monitor, Moon, RefreshCw, Sun } from "lucide-svelte";
+  import { AppWindow, Check, ChevronDown, ExternalLink, Globe, Monitor, Moon, RefreshCw, Sun } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
   import DatePicker from "$lib/components/date-picker.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
+  import Switch from "$lib/components/ui/switch/switch.svelte";
   import { store, flashSuccess, fmtBytes, themeState, setThemeMode } from "$lib/stores.svelte.ts";
   import type { AppDef, DownloadPackageInfo, SettingsInfo } from "$lib/types";
 
@@ -23,6 +24,7 @@
   let cacheBusy = $state(false);
   let apps = $state<AppDef[]>([]);
   let logViewer = $state("");
+  let closeToTray = $state(true);
   let openEditor = $state(false);
   let openRefresh = $state(false);
 
@@ -47,6 +49,7 @@
     try {
       settingsInfo = await invoke<SettingsInfo>("get_settings");
       logViewer = settingsInfo.log_viewer;
+      closeToTray = settingsInfo.close_to_tray;
       await loadApps();
     } catch (e) {
       store.errorMsg = String(e);
@@ -67,6 +70,18 @@
       await invoke("set_log_viewer", { app });
       flashSuccess("日志查看器已更新");
     } catch (e) {
+      store.errorMsg = String(e);
+    }
+  }
+
+  async function changeCloseToTray(value: boolean) {
+    const previous = closeToTray;
+    closeToTray = value;
+    try {
+      await invoke("set_close_to_tray", { closeToTray: value });
+      flashSuccess("窗口行为已更新");
+    } catch (e) {
+      closeToTray = previous;
       store.errorMsg = String(e);
     }
   }
@@ -243,6 +258,28 @@
             已使用浅色主题。
           {/if}
         </p>
+      </section>
+      <section class="settings-section">
+        <h2 class="settings-title">窗口行为</h2>
+        <hr class="settings-divider" />
+        <div class="settings-toggle-row">
+          <div class="settings-toggle-content">
+            <span class="settings-toggle-icon">
+              <AppWindow size={17} aria-hidden="true" />
+            </span>
+            <div class="settings-toggle-copy">
+              <div class="settings-toggle-label">关闭时最小化到托盘</div>
+              <p class="settings-toggle-desc">
+                勾选后点击关闭按钮会隐藏到系统托盘，取消则直接退出应用。
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={closeToTray}
+            onCheckedChange={changeCloseToTray}
+            label="关闭时最小化到托盘"
+          />
+        </div>
       </section>
       <section class="settings-section">
         <h2 class="settings-title">首选编辑器</h2>
