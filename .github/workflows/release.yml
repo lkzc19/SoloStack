@@ -148,7 +148,8 @@ jobs:
           # 注意：**不要**把没配好的变量以空字符串传进来 —— Tauri 见到空的
           # APPLE_CERTIFICATE 会当成「要签名却没有证书」而直接报错。
           #
-          # 未签名时产物仍可分发，但对方需要右键「打开」或执行：
+          # 当前未配置 Apple Developer ID，Tauri 使用 ad-hoc 签名保证 arm64
+          # 应用包结构有效；首次下载仍可能需要右键「打开」或执行：
           #   xattr -dr com.apple.quarantine /Applications/solostack.app
         with:
           tagName: ${{ needs.resolve.outputs.tag }}
@@ -157,3 +158,14 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: --target aarch64-apple-darwin
+
+      - name: Verify macOS app signature
+        run: |
+          APP="target/aarch64-apple-darwin/release/bundle/macos/solostack.app"
+          test -d "$APP" || {
+            echo "::error::未找到 macOS app bundle: $APP"
+            exit 1
+          }
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test "$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")" = \
+            "$(node scripts/check-app-version.mjs)"
