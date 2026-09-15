@@ -5,12 +5,17 @@
   import Button from "$lib/components/ui/button/button.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
   import Select from "$lib/components/ui/select/select.svelte";
-  import Switch from "$lib/components/ui/switch/switch.svelte";
+  import {
+    componentAdapter,
+    supportedComponentIds,
+    validateComponentRegistry,
+    validateInstallParamIds,
+  } from "$lib/component-adapters/registry";
   import { store, doInstall } from "$lib/stores.svelte.ts";
   import type { ManifestInfo, InstallSource, JdkInfo, InstallParam } from "$lib/types";
 
   let componentConfigs = $state<ManifestInfo[]>([]);
-  let installComponents = $state<string[]>([]);
+  let installComponents = $state<string[]>(supportedComponentIds());
   let installComponent = $state("");
   let installVersions = $state<string[]>([]);
   let installVersion = $state("");
@@ -23,13 +28,6 @@
   // 安装参数：值全部来自组件的声明（list_install_params），前端不再写死默认值。
   // 表单的布局与文案仍按组件定制（各组件字段差异大，不做通用化）。
   let installParams = $state<Record<string, string>>({});
-
-  const kafkaMsgItems = $derived(
-    ["1", "10", "50", "100", "500"].map((v) => ({
-      value: v,
-      label: v === "1" ? "1 MB（默认）" : `${v} MB`,
-    }))
-  );
 
   const jdkItems = $derived(
     jdks.map((j) => ({
@@ -50,6 +48,7 @@
   // 当前组件是否需要 Java（config json 有 java_support 才需要）
   const currentConfig = $derived(componentConfigs.find((c) => c.component === installComponent) ?? null);
   const hasJava = $derived(Object.keys(currentConfig?.java_support ?? {}).length > 0);
+  const installAdapter = $derived(componentAdapter(installComponent));
 
   onMount(() => {
     loadInstallData();
@@ -59,7 +58,8 @@
     store.errorMsg = "";
     try {
       componentConfigs = await invoke<ManifestInfo[]>("list_component_manifests");
-      installComponents = ["hadoop", "kafka"];
+      validateComponentRegistry(componentConfigs);
+      installComponents = supportedComponentIds();
       if (!installComponents.includes(installComponent)) {
         installComponent = installComponents[0] ?? "";
       }
@@ -97,10 +97,6 @@
     void refreshInstallParams();
   }
 
-  function paramOf(id: string): string {
-    return installParams[id] ?? "";
-  }
-
   function setParam(id: string, value: string) {
     installParams = { ...installParams, [id]: value };
   }
@@ -119,6 +115,7 @@
         version: ver,
       });
       if (comp !== installComponent || ver !== installVersion) return;
+      validateInstallParamIds(comp, ver, declared.map((param) => param.id));
       installParams = Object.fromEntries(declared.map((d) => [d.id, d.default]));
     } catch (e) {
       store.errorMsg = String(e);
@@ -190,7 +187,7 @@
           class:active={installComponent === c}
           onclick={() => selectInstallComponent(c)}
         >
-          {c}
+          {componentAdapter(c)?.displayName ?? c}
         </button>
       {/each}
     </div>
@@ -242,104 +239,14 @@
           </div>
         </div>
       {/if}
-      {#if installComponent === "hadoop"}
-        <div class="install-fields" style="margin-top: 1.2rem;">
-          <div class="install-field">
-            <span class="install-label">HDFS WebUI 端口</span>
-            <input
-              class="input mono"
-              type="number"
-              min="1024"
-              max="65535"
-              value={paramOf("namenode_web_port")}
-              oninput={(e) => setParam("namenode_web_port", e.currentTarget.value)}
-            />
-          </div>
-          <div class="install-field">
-            <span class="install-label">YARN WebUI 端口</span>
-            <input
-              class="input mono"
-              type="number"
-              min="1024"
-              max="65535"
-              value={paramOf("yarn_rm_web_port")}
-              oninput={(e) => setParam("yarn_rm_web_port", e.currentTarget.value)}
-            />
-          </div>
-        </div>
-        <div class="install-fields" style="margin-top: 1.2rem;">
-          <div class="install-field">
-            <span class="install-label">JobHistory</span>
-            <Switch
-              checked={paramOf("history_enabled") === "true"}
-              onCheckedChange={(v) => setParam("history_enabled", v ? "true" : "false")}
-            />
-          </div>
-          <div class="install-field history-port-field" class:on={paramOf("history_enabled") === "true"}>
-            <span class="install-label">JobHistory WebUI 端口</span>
-            <input
-              class="input mono"
-              type="number"
-              min="1024"
-              max="65535"
-              value={paramOf("history_web_port")}
-              oninput={(e) => setParam("history_web_port", e.currentTarget.value)}
-            />
-          </div>
-        </div>
-      {/if}
-      {#if installComponent === "kafka"}
-        <div class="install-fields" style="margin-top: 1.2rem;">
-          <div class="install-field">
-            <span class="install-label">Broker 端口</span>
-            <input
-              class="input mono"
-              type="number"
-              min="1024"
-              max="65535"
-              value={paramOf("broker_port")}
-              oninput={(e) => setParam("broker_port", e.currentTarget.value)}
-            />
-          </div>
-          <div class="install-field">
-            <span class="install-label">默认分区数</span>
-            <input
-              class="input mono"
-              type="number"
-              value={paramOf("num_partitions")}
-              oninput={(e) => setParam("num_partitions", e.currentTarget.value)}
-            />
-          </div>
-        </div>
-        <div class="install-fields" style="margin-top: 1.2rem;">
-          <div class="install-field">
-            <span class="install-label">消息保留时长（小时）</span>
-            <input
-              class="input mono"
-              type="number"
-              value={paramOf("retention_hours")}
-              oninput={(e) => setParam("retention_hours", e.currentTarget.value)}
-            />
-          </div>
-          <div class="install-field">
-            <span class="install-label">单条消息上限</span>
-            <Select
-              class="full field-select"
-              value={paramOf("message_max_mb")}
-              items={kafkaMsgItems}
-              onSelect={(v) => setParam("message_max_mb", v)}
-            />
-          </div>
-        </div>
-        <div class="install-fields" style="margin-top: 1.2rem;">
-          <div class="install-field">
-            <span class="install-label">自动创建 Topic</span>
-            <Switch
-              checked={paramOf("auto_create_topics") === "true"}
-              onCheckedChange={(v) => setParam("auto_create_topics", v ? "true" : "false")}
-            />
-          </div>
-        </div>
+      {#if installAdapter}
+        {@const InstallFields = installAdapter.installFields}
+        <InstallFields
+          component={installAdapter.id}
+          version={installVersion}
+          params={installParams}
+          onParamChange={setParam}
+        />
       {/if}
     </section>
 

@@ -1,0 +1,38 @@
+name: lifecycle-smoke
+
+# 真实下载并启动 Hadoop/Kafka，不跑 GUI。可手动触发，也由 release workflow 调用。
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify Apple Silicon runner
+        run: |
+          test "$(uname -m)" = "arm64" || {
+            echo "::error::Hadoop 3.5.0 manifest 仅提供 aarch64 包，smoke test 需要 arm64 runner"
+            exit 1
+          }
+
+      - name: Run real component lifecycle smoke test
+        env:
+          # GitHub runner 在海外，使用 manifest 的生产首选官方源。
+          SOLOSTACK_SMOKE_SOURCE: 官方源
+        run: cargo test -p solostack-core --test lifecycle_smoke -- --ignored --nocapture --test-threads=1

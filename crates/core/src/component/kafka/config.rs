@@ -5,15 +5,17 @@ use crate::app::paths;
 use crate::component::fields::{param_bool, param_port, param_positive_int};
 use crate::component::ports;
 use crate::component::{
-    self, ConfigFieldValue, ConfigLayout, ConfigLifecycle, FieldSchema, InstallParam, InstallParams,
+    self, ConfigFieldUpdate, ConfigFieldValue, ConfigLayout, ConfigLifecycle, FieldSchema,
+    InstallParam, InstallParams,
 };
+use crate::config::ConfigPlan;
 
 pub(super) const F_PROPS: &str = "server.properties";
 /// Kafka 没有官方环境文件（`bin/kafka-run-class.sh` 只认环境变量 JAVA_HOME），
 /// 故由 SoloStack 生成一个，启动时读它注入 JAVA_HOME。见 docs/Config-File-Design.md §7.3。
 pub(super) const F_ENV: &str = "solostack-env.sh";
 
-const BROKER_DEFAULT: u16 = 9092;
+pub(super) const BROKER_DEFAULT: u16 = 9092;
 
 // 安装参数 id（组件自己声明的参数表；前端提交同名键）
 const P_BROKER_PORT: &str = "broker_port";
@@ -170,43 +172,94 @@ impl FieldSchema for Kafka {
         ]
     }
 
-    fn set_field(&self, version: &str, field_id: &str, value: &str) -> Result<(), String> {
-        match field_id {
-            "broker_port" => {
-                let port = component::fields::parse_port(value)?;
-                ensure_broker_port_ok(port)?;
-                let f = component::open_config(NAME, version, F_PROPS)?;
-                let current = f
-                    .get(K_LISTENERS)?
-                    .unwrap_or_else(|| listeners(BROKER_DEFAULT));
-                f.set(K_LISTENERS, &replace_broker_port(&current, port))?;
-                // advertised 必须跟着改，否则客户端会拿到旧端口
-                let advertised = f
-                    .get(K_ADVERTISED)?
-                    .unwrap_or_else(|| advertised_listeners(BROKER_DEFAULT));
-                f.set(K_ADVERTISED, &replace_broker_port(&advertised, port))
-            }
-            "num_partitions" => {
-                let n = component::fields::parse_positive_int(value, "默认分区数")?;
-                if n > 100_000 {
-                    return Err("默认分区数过大".to_string());
+    fn plan_field_updates(
+        &self,
+        version: &str,
+        updates: &[ConfigFieldUpdate],
+    ) -> Result<ConfigPlan, String> {
+        let mut next = Effective::from_config(version);
+        let mut broker_port = None;
+        let mut num_partitions = None;
+        let mut retention_hours = None;
+        let mut message_max_mb = None;
+        let mut auto_create_topics = None;
+
+        for update in updates {
+            match update.id.as_str() {
+                "broker_port" => {
+                    let port = component::fields::parse_port(&update.value)?;
+                    ensure_broker_port_ok(port)?;
+                    broker_port = Some(port);
+                    next.broker = port;
                 }
-                set_prop(version, K_NUM_PARTITIONS, &n.to_string())
+                "num_partitions" => {
+                    let value = component::fields::parse_positive_int(&update.value, "默认分区数")?;
+                    if value > 100_000 {
+                        return Err("默认分区数过大".to_string());
+                    }
+                    num_partitions = Some(value);
+                    next.num_partitions = value;
+                }
+                "retention_hours" => {
+                    let value =
+                        component::fields::parse_positive_int(&update.value, "消息保留时长")?;
+                    retention_hours = Some(value);
+                    next.retention_hours = value;
+                }
+                "message_max_mb" => {
+                    let value =
+                        component::fields::parse_positive_int(&update.value, "单条消息上限")?;
+                    message_max_mb = Some(value);
+                    next.message_max_mb = value;
+                }
+                "auto_create_topics" => {
+                    let value = match update.value.trim() {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err("自动创建 Topic 取值无效".to_string()),
+                    };
+                    auto_create_topics = Some(value);
+                    next.auto_create_topics = value;
+                }
+                _ => return Err(format!("未知配置字段: {}", update.id)),
             }
-            "retention_hours" => {
-                let h = component::fields::parse_positive_int(value, "消息保留时长")?;
-                set_prop(version, K_RETENTION_HOURS, &h.to_string())
-            }
-            "message_max_mb" => {
-                let mb = component::fields::parse_positive_int(value, "单条消息上限")?;
-                set_prop(version, K_MESSAGE_MAX_BYTES, &mb_to_bytes(mb).to_string())
-            }
-            "auto_create_topics" => match value.trim() {
-                "true" | "false" => set_prop(version, K_AUTO_CREATE, value.trim()),
-                _ => Err("自动创建 Topic 取值无效".to_string()),
-            },
-            _ => Err(format!("未知配置字段: {field_id}")),
         }
+        ensure_broker_port_ok(next.broker)?;
+
+        let path = component::config_path(NAME, version, F_PROPS)?;
+        let mut plan = ConfigPlan::new();
+        if let Some(port) = broker_port {
+            let current_listeners = read_prop(version, K_LISTENERS, &listeners(BROKER_DEFAULT));
+            let current_advertised =
+                read_prop(version, K_ADVERTISED, &advertised_listeners(BROKER_DEFAULT));
+            plan.set(
+                path.clone(),
+                K_LISTENERS,
+                replace_broker_port(&current_listeners, port),
+            )?;
+            plan.set(
+                path.clone(),
+                K_ADVERTISED,
+                replace_broker_port(&current_advertised, port),
+            )?;
+        }
+        if let Some(value) = num_partitions {
+            plan.set(path.clone(), K_NUM_PARTITIONS, value.to_string())?;
+        }
+        if let Some(value) = retention_hours {
+            plan.set(path.clone(), K_RETENTION_HOURS, value.to_string())?;
+        }
+        if let Some(value) = message_max_mb {
+            plan.set(
+                path.clone(),
+                K_MESSAGE_MAX_BYTES,
+                mb_to_bytes(value).to_string(),
+            )?;
+        }
+        if let Some(value) = auto_create_topics {
+            plan.set(path, K_AUTO_CREATE, value.to_string())?;
+        }
+        Ok(plan)
     }
 }
 
@@ -228,6 +281,8 @@ fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
     ensure_broker_port_ok(eff.broker)?;
     let data_root = paths::var_data_instance_dir(NAME, version).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_root).map_err(|e| e.to_string())?;
+    let path = component::config_path(NAME, version, F_PROPS)?;
+    let mut plan = ConfigPlan::new();
 
     let entries = [
         (K_ROLES, "broker,controller".to_string()),
@@ -249,15 +304,10 @@ fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
         ),
         (K_AUTO_CREATE, eff.auto_create_topics.to_string()),
     ];
-    let additions: Vec<crate::config::Entry> = entries
-        .iter()
-        .map(|(k, v)| crate::config::Entry::new(*k, v.clone()))
-        .collect();
-    component::open_config(NAME, version, F_PROPS)?.update_entries(&additions)
-}
-
-fn set_prop(version: &str, key: &str, value: &str) -> Result<(), String> {
-    component::open_config(NAME, version, F_PROPS)?.set(key, value)
+    for (key, value) in entries {
+        plan.set(path.clone(), key, value)?;
+    }
+    crate::config::apply_plan(&plan)
 }
 
 fn read_prop(version: &str, key: &str, default: &str) -> String {
@@ -311,7 +361,7 @@ fn read_raw_opt(version: &str, key: &str) -> Option<String> {
 }
 
 /// broker 端口：从 `listeners` 里精确读。
-fn read_broker(version: &str) -> Option<u16> {
+pub(super) fn read_broker(version: &str) -> Option<u16> {
     let listeners = read_prop(version, K_LISTENERS, "");
     let port = broker_port(&listeners)?;
     port.parse().ok()
@@ -386,6 +436,15 @@ fn mb_from_bytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
 
+    fn save_field(id: &str, value: &str) -> Result<(), String> {
+        let updates = [ConfigFieldUpdate {
+            id: id.to_string(),
+            value: value.to_string(),
+        }];
+        let plan = Kafka.plan_field_updates("4.3.1", &updates)?;
+        crate::config::apply_plan(&plan)
+    }
+
     fn setup_instance(tmp: &std::path::Path) {
         std::env::set_var("HOME", tmp);
         let dir = component::config_dir(NAME, "4.3.1").unwrap();
@@ -458,7 +517,7 @@ mod tests {
         assert_eq!(Effective::from_config("4.3.1"), eff);
 
         // 改端口：写入 listeners 并能精确读回
-        Kafka.set_field("4.3.1", "broker_port", "9095").unwrap();
+        save_field("broker_port", "9095").unwrap();
         assert_eq!(Kafka.detect_ports("4.3.1"), vec![9095]);
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -534,14 +593,12 @@ mod tests {
         assert!(err.contains("controller"), "实际报错: {err}");
 
         // 配置页：同样拦下
-        let err = Kafka
-            .set_field("4.3.1", "broker_port", &CONTROLLER_PORT.to_string())
-            .unwrap_err();
+        let err = save_field("broker_port", &CONTROLLER_PORT.to_string()).unwrap_err();
         assert!(err.contains("controller"), "实际报错: {err}");
 
         // 0 与特权端口被拒
-        assert!(Kafka.set_field("4.3.1", "broker_port", "0").is_err());
-        assert!(Kafka.set_field("4.3.1", "broker_port", "80").is_err());
+        assert!(save_field("broker_port", "0").is_err());
+        assert!(save_field("broker_port", "80").is_err());
         // 端口未被改动
         assert_eq!(Kafka.detect_ports("4.3.1"), vec![BROKER_DEFAULT]);
 
@@ -582,7 +639,7 @@ mod tests {
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
-        Kafka.set_field("4.3.1", "broker_port", "9095").unwrap();
+        save_field("broker_port", "9095").unwrap();
 
         let content =
             std::fs::read_to_string(component::config_dir(NAME, "4.3.1").unwrap().join(F_PROPS))

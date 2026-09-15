@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
+import { validateInstalledAdapters } from "./component-adapters/registry";
 import type {
   ComponentInfo,
   ComponentStatusInfo,
@@ -162,7 +163,7 @@ async function waitForStatus(name: string, target: "running" | "stopped", timeou
     await refreshComponents();
     const comp = store.components.find((c) => c.name === name);
     const status = comp?.status;
-    if (target === "running" && (status === "running" || status === "partial")) return true;
+    if (target === "running" && status === "running") return true;
     if (target === "stopped" && (!comp || status === "stopped" || status === "not_installed")) return true;
     await sleep(1000);
   }
@@ -170,6 +171,7 @@ async function waitForStatus(name: string, target: "running" | "stopped", timeou
 }
 
 export async function loadComponents(list: ComponentInfo[]) {
+  validateInstalledAdapters(list);
   const withStatus = await Promise.all(
     list.map(async (c) => {
       let status: Status = "not_installed";
@@ -196,7 +198,7 @@ export function handleInstallProgress(p: InstallProgressPayload) {
     store.installPct = 0;
     store.installLines = [
       ...store.installLines,
-      p.cached ? "检查包：已存在，跳过下载" : "检查包：不存在，开始下载",
+      p.cached ? "检查包：发现缓存，将校验 SHA256" : "检查包：开始下载",
     ];
   } else if (p.phase === "downloading") {
     const realPct = p.total > 0 ? Math.round((p.bytes / p.total) * 100) : 0;

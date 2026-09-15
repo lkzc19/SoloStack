@@ -5,8 +5,10 @@ use crate::app::paths;
 use crate::component::fields::{param_bool, param_port};
 use crate::component::ports::pick_free;
 use crate::component::{
-    self, ConfigFieldValue, ConfigLayout, ConfigLifecycle, FieldSchema, InstallParam, InstallParams,
+    self, ConfigFieldUpdate, ConfigFieldValue, ConfigLayout, ConfigLifecycle, FieldSchema,
+    InstallParam, InstallParams,
 };
+use crate::config::ConfigPlan;
 
 // 配置文件名（官方模板自带，原地修改）
 pub(super) const F_CORE: &str = "core-site.xml";
@@ -42,7 +44,7 @@ const RM_WEB_DEFAULT: u16 = 8088;
 const NM_WEB_DEFAULT: u16 = 8042;
 const HISTORY_DEFAULT: u16 = 19888;
 /// NameNode RPC 端口（`fs.defaultFS` 用，不参与探活）。
-const NAMENODE_RPC: u16 = 8020;
+pub(super) const NAMENODE_RPC: u16 = 8020;
 /// SecondaryNameNode WebUI（固定，不参与探活）。
 const SECONDARY_HTTP: u16 = 50090;
 
@@ -181,61 +183,89 @@ impl FieldSchema for Hadoop {
         ]
     }
 
-    fn set_field(&self, version: &str, field_id: &str, value: &str) -> Result<(), String> {
-        match field_id {
-            "namenode_web_port" => {
-                let port = component::fields::parse_port(value)?;
-                let mut eff = Effective::from_config(version);
-                eff.nn_web = port;
-                ensure_ports_distinct(&eff)?;
-                set_xml(version, F_HDFS, K_NN_HTTP, &format!("localhost:{port}"))
-            }
-            "yarn_rm_web_port" => {
-                let port = component::fields::parse_port(value)?;
-                let mut eff = Effective::from_config(version);
-                eff.rm_web = port;
-                ensure_ports_distinct(&eff)?;
-                set_xml(version, F_YARN, K_RM_WEB, &format!("localhost:{port}"))
-            }
-            "history_enabled" => match value.trim() {
-                "true" => {
-                    if read_port(version, F_MAPRED, K_HISTORY_WEB).is_none() {
-                        let port = pick_free(HISTORY_DEFAULT, HISTORY_DEFAULT);
-                        let mut eff = Effective::from_config(version);
-                        eff.history = Some(port);
-                        ensure_ports_distinct(&eff)?;
-                        set_xml(
-                            version,
-                            F_MAPRED,
-                            K_HISTORY_WEB,
-                            &format!("localhost:{port}"),
-                        )
-                    } else {
-                        Ok(())
-                    }
+    fn plan_field_updates(
+        &self,
+        version: &str,
+        updates: &[ConfigFieldUpdate],
+    ) -> Result<ConfigPlan, String> {
+        let current = Effective::from_config(version);
+        let mut next = current.clone();
+        let mut set_namenode = false;
+        let mut set_yarn = false;
+        let mut history_enabled = None;
+        let mut history_port = None;
+
+        for update in updates {
+            match update.id.as_str() {
+                "namenode_web_port" => {
+                    next.nn_web = component::fields::parse_port(&update.value)?;
+                    set_namenode = true;
                 }
-                "false" => remove_xml_if_present(version, F_MAPRED, K_HISTORY_WEB),
-                _ => Err("历史服务器开关取值无效".to_string()),
-            },
-            "history_web_port" => {
-                // 关闭状态下的空操作：开关关掉后「键存在即开启」，若这里照写就会把
-                // 刚删除的键写回去（配置页保存会提交全部字段，顺序在 history_enabled 之后）
-                if read_port(version, F_MAPRED, K_HISTORY_WEB).is_none() {
-                    return Ok(());
+                "yarn_rm_web_port" => {
+                    next.rm_web = component::fields::parse_port(&update.value)?;
+                    set_yarn = true;
                 }
-                let port = component::fields::parse_port(value)?;
-                let mut eff = Effective::from_config(version);
-                eff.history = Some(port);
-                ensure_ports_distinct(&eff)?;
-                set_xml(
-                    version,
-                    F_MAPRED,
-                    K_HISTORY_WEB,
-                    &format!("localhost:{port}"),
-                )
+                "history_enabled" => {
+                    history_enabled = match update.value.trim() {
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        _ => return Err("历史服务器开关取值无效".to_string()),
+                    };
+                }
+                "history_web_port" => {
+                    history_port = Some(component::fields::parse_port(&update.value)?);
+                }
+                _ => return Err(format!("未知配置字段: {}", update.id)),
             }
-            _ => Err(format!("未知配置字段: {field_id}")),
         }
+
+        match history_enabled {
+            Some(true) => {
+                next.history = Some(
+                    history_port
+                        .or(next.history)
+                        .unwrap_or_else(|| pick_free(HISTORY_DEFAULT, HISTORY_DEFAULT)),
+                );
+            }
+            Some(false) => next.history = None,
+            None if history_port.is_some() && next.history.is_some() => {
+                next.history = history_port;
+            }
+            None => {}
+        }
+        ensure_ports_distinct(&next)?;
+
+        let mut plan = ConfigPlan::new();
+        if set_namenode {
+            plan.set(
+                component::config_path(NAME, version, F_HDFS)?,
+                K_NN_HTTP,
+                format!("localhost:{}", next.nn_web),
+            )?;
+        }
+        if set_yarn {
+            plan.set(
+                component::config_path(NAME, version, F_YARN)?,
+                K_RM_WEB,
+                format!("localhost:{}", next.rm_web),
+            )?;
+        }
+
+        let history_touched =
+            history_enabled.is_some() || (history_port.is_some() && current.history.is_some());
+        if history_touched {
+            let path = component::config_path(NAME, version, F_MAPRED)?;
+            match next.history {
+                Some(port) => {
+                    plan.set(path, K_HISTORY_WEB, format!("localhost:{port}"))?;
+                }
+                None if current.history.is_some() => {
+                    plan.remove(path, K_HISTORY_WEB)?;
+                }
+                None => {}
+            }
+        }
+        Ok(plan)
     }
 }
 
@@ -262,120 +292,110 @@ fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
     ensure_ports_distinct(eff)?;
     let data_root = paths::var_data_instance_dir(NAME, version).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_root).map_err(|e| e.to_string())?;
+    let mut plan = ConfigPlan::new();
 
     // core-site.xml：RPC 端口固定 8020（WebUI 端口 9870 与之不同，勿混用）
-    set_xml(
-        version,
-        F_CORE,
+    plan.set(
+        component::config_path(NAME, version, F_CORE)?,
         K_FS_DEFAULT_FS,
-        &format!("hdfs://localhost:{NAMENODE_RPC}"),
+        format!("hdfs://localhost:{NAMENODE_RPC}"),
     )?;
 
     // 数据目录：写 SoloStack 受管路径（见 managed_namenode_dir 的说明）
-    set_xml(
-        version,
-        F_HDFS,
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
         K_NN_NAME_DIR,
-        &managed_namenode_dir(version)?.display().to_string(),
+        managed_namenode_dir(version)?.display().to_string(),
     )?;
-    set_xml(
-        version,
-        F_HDFS,
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
         K_DN_DATA_DIR,
-        &managed_datanode_dir(version)?.display().to_string(),
+        managed_datanode_dir(version)?.display().to_string(),
     )?;
-    set_xml(version, F_HDFS, K_REPLICATION, "1")?;
-    set_xml(
-        version,
-        F_HDFS,
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
+        K_REPLICATION,
+        "1",
+    )?;
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
         K_NN_HTTP,
-        &format!("localhost:{}", eff.nn_web),
+        format!("localhost:{}", eff.nn_web),
     )?;
-    set_xml(
-        version,
-        F_HDFS,
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
         K_DN_HTTP,
-        &format!("0.0.0.0:{}", eff.dn_http),
+        format!("0.0.0.0:{}", eff.dn_http),
     )?;
-    set_xml(
-        version,
-        F_HDFS,
+    plan.set(
+        component::config_path(NAME, version, F_HDFS)?,
         K_SECONDARY_HTTP,
-        &format!("localhost:{SECONDARY_HTTP}"),
+        format!("localhost:{SECONDARY_HTTP}"),
     )?;
 
-    set_xml(version, F_YARN, K_RM_HOST, "localhost")?;
-    set_xml(
-        version,
-        F_YARN,
-        K_RM_WEB,
-        &format!("localhost:{}", eff.rm_web),
+    plan.set(
+        component::config_path(NAME, version, F_YARN)?,
+        K_RM_HOST,
+        "localhost",
     )?;
-    set_xml(
-        version,
-        F_YARN,
+    plan.set(
+        component::config_path(NAME, version, F_YARN)?,
+        K_RM_WEB,
+        format!("localhost:{}", eff.rm_web),
+    )?;
+    plan.set(
+        component::config_path(NAME, version, F_YARN)?,
         K_NM_WEB,
-        &format!("0.0.0.0:{}", eff.nm_web),
+        format!("0.0.0.0:{}", eff.nm_web),
     )?;
 
     // mapred-site.xml：只在真正受管时落笔（开启写键，关闭删键），不白贴受管说明
     match eff.history {
-        Some(port) => set_xml(
-            version,
-            F_MAPRED,
+        Some(port) => plan.set(
+            component::config_path(NAME, version, F_MAPRED)?,
             K_HISTORY_WEB,
-            &format!("localhost:{port}"),
+            format!("localhost:{port}"),
         )?,
-        None => remove_xml_if_present(version, F_MAPRED, K_HISTORY_WEB)?,
+        None if read_port(version, F_MAPRED, K_HISTORY_WEB).is_some() => {
+            plan.remove(
+                component::config_path(NAME, version, F_MAPRED)?,
+                K_HISTORY_WEB,
+            )?;
+        }
+        None => {}
     }
 
     // hadoop-env.sh：日志与 pid 目录（JAVA_HOME 由通用 JDK 流程写入）
-    let env = component::open_config(NAME, version, F_ENV)?;
-    env.set(
+    plan.set(
+        component::config_path(NAME, version, F_ENV)?,
         "HADOOP_LOG_DIR",
-        &paths::var_log_instance_dir(NAME, version)
+        paths::var_log_instance_dir(NAME, version)
             .map_err(|e| e.to_string())?
             .display()
             .to_string(),
     )?;
-    env.set(
+    plan.set(
+        component::config_path(NAME, version, F_ENV)?,
         "HADOOP_PID_DIR",
-        &paths::var_run_instance_dir(NAME, version)
+        paths::var_run_instance_dir(NAME, version)
             .map_err(|e| e.to_string())?
             .display()
             .to_string(),
     )?;
 
-    ensure_workers(version)
-}
-
-/// `workers` 是纯主机列表（非键值格式，故不走 `config` 模块）：只要非空即可，
-/// 官方模板自带 `localhost`，不覆盖用户的改动。
-fn ensure_workers(version: &str) -> Result<(), String> {
+    // `workers` 是纯主机列表：只要非空即可，官方模板自带 `localhost`，不覆盖用户改动。
     let path = component::config_path(NAME, version, F_WORKERS)?;
     let non_empty = std::fs::read_to_string(&path)
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
-    if non_empty {
-        return Ok(());
+    if !non_empty {
+        plan.replace_text(path, "localhost\n")?;
     }
-    crate::config::write_text(&path, "localhost\n")
+
+    crate::config::apply_plan(&plan)
 }
 
 // ── XML 键值读写（薄封装，格式细节归 config 模块）──────
-
-fn set_xml(version: &str, file: &str, key: &str, value: &str) -> Result<(), String> {
-    component::open_config(NAME, version, file)?.set(key, value)
-}
-
-/// 键存在才删（避免为「本来就没有键」的文件贴上受管说明）。
-fn remove_xml_if_present(version: &str, file: &str, key: &str) -> Result<(), String> {
-    let f = component::open_config(NAME, version, file)?;
-    if f.get(key)?.is_some() {
-        f.remove(key)?;
-    }
-    Ok(())
-}
 
 /// 精确读一个配置项的原始值（空值视为未设置）。
 fn read_raw(version: &str, file: &str, key: &str) -> Option<String> {
@@ -456,6 +476,15 @@ pub(super) fn history_enabled(version: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn save_field(id: &str, value: &str) -> Result<(), String> {
+        let updates = [ConfigFieldUpdate {
+            id: id.to_string(),
+            value: value.to_string(),
+        }];
+        let plan = Hadoop.plan_field_updates("3.5.0", &updates)?;
+        crate::config::apply_plan(&plan)
+    }
 
     /// 在临时 HOME 下铺一份「解压出来的官方配置」，供读写测试。
     fn setup_instance(tmp: &std::path::Path) {
@@ -548,9 +577,7 @@ mod tests {
         .unwrap();
         assert!(history_enabled("3.5.0"));
 
-        Hadoop
-            .set_field("3.5.0", "history_enabled", "false")
-            .unwrap();
+        save_field("history_enabled", "false").unwrap();
         assert!(!history_enabled("3.5.0"), "关闭后应删掉受管键");
         assert_eq!(
             Hadoop.detect_ports("3.5.0").len(),
@@ -575,27 +602,19 @@ mod tests {
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
-        Hadoop
-            .set_field("3.5.0", "history_enabled", "false")
-            .unwrap();
+        save_field("history_enabled", "false").unwrap();
         assert!(!history_enabled("3.5.0"));
 
         // 模拟配置页保存：紧接着提交 history_web_port（字段顺序在开关之后）
-        Hadoop
-            .set_field("3.5.0", "history_web_port", "19888")
-            .unwrap();
+        save_field("history_web_port", "19888").unwrap();
         assert!(
             !history_enabled("3.5.0"),
             "关闭状态下提交端口不应把键写回（否则开关会被静默改回开启）"
         );
 
         // 开启后可以正常改端口
-        Hadoop
-            .set_field("3.5.0", "history_enabled", "true")
-            .unwrap();
-        Hadoop
-            .set_field("3.5.0", "history_web_port", "19899")
-            .unwrap();
+        save_field("history_enabled", "true").unwrap();
+        save_field("history_web_port", "19899").unwrap();
         assert_eq!(read_port("3.5.0", F_MAPRED, K_HISTORY_WEB), Some(19899));
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -616,9 +635,7 @@ mod tests {
         .unwrap();
         let nn_web = read_port("3.5.0", F_HDFS, K_NN_HTTP).unwrap();
 
-        let err = Hadoop
-            .set_field("3.5.0", "yarn_rm_web_port", &nn_web.to_string())
-            .unwrap_err();
+        let err = save_field("yarn_rm_web_port", &nn_web.to_string()).unwrap_err();
         assert!(err.contains("端口冲突"), "实际报错: {err}");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -636,12 +653,8 @@ mod tests {
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
-        Hadoop
-            .set_field("3.5.0", "namenode_web_port", "9871")
-            .unwrap();
-        Hadoop
-            .set_field("3.5.0", "yarn_rm_web_port", "8089")
-            .unwrap();
+        save_field("namenode_web_port", "9871").unwrap();
+        save_field("yarn_rm_web_port", "8089").unwrap();
 
         let values = Hadoop.field_values("3.5.0");
         let get = |id: &str| values.iter().find(|v| v.id == id).unwrap().value.clone();
@@ -652,6 +665,41 @@ mod tests {
             9871,
             "改端口后探活应读新值"
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn batch_save_does_not_write_when_any_field_is_invalid() {
+        let _guard = crate::test_util::HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-hadoop-batch-rollback");
+        let _ = std::fs::remove_dir_all(&tmp);
+        setup_instance(&tmp);
+        write_config(
+            "3.5.0",
+            &Effective::from_install(&install_params()).unwrap(),
+        )
+        .unwrap();
+
+        let hdfs = component::config_path(NAME, "3.5.0", F_HDFS).unwrap();
+        let yarn = component::config_path(NAME, "3.5.0", F_YARN).unwrap();
+        let hdfs_before = std::fs::read_to_string(&hdfs).unwrap();
+        let yarn_before = std::fs::read_to_string(&yarn).unwrap();
+        let updates = [
+            ConfigFieldUpdate {
+                id: "namenode_web_port".into(),
+                value: "9871".into(),
+            },
+            ConfigFieldUpdate {
+                id: "yarn_rm_web_port".into(),
+                value: "0".into(),
+            },
+        ];
+
+        let err = crate::component::schema::save_fields("hadoop", "3.5.0", &updates).unwrap_err();
+        assert!(err.contains("端口"), "{err}");
+        assert_eq!(std::fs::read_to_string(&hdfs).unwrap(), hdfs_before);
+        assert_eq!(std::fs::read_to_string(&yarn).unwrap(), yarn_before);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

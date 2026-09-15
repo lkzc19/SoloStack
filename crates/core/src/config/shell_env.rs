@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use super::line::{lookup, merge, remove};
-use super::{commit, lines_of, read_opt, ConfigFile, Entry, Format};
+use super::{lines_of, read_opt, ConfigFile, Entry, Format};
 
 pub struct ShellEnvFile {
     path: PathBuf,
@@ -43,23 +43,14 @@ impl ConfigFile for ShellEnvFile {
         Ok(lookup(&read_opt(&self.path)?, key, parse, value))
     }
 
-    fn update_entries(&self, additions: &[Entry]) -> Result<(), String> {
+    fn render_entries(&self, additions: &[Entry], removals: &[&str]) -> Result<String, String> {
         let content = read_opt(&self.path)?;
         if content.trim().is_empty() {
             let lines: Vec<String> = additions.iter().map(|e| render(&e.key, &e.value)).collect();
-            return commit(&self.path, self.comment_style(), &lines.join("\n"));
+            return Ok(lines.join("\n"));
         }
-        let body = merge(&content, additions, key_of, render);
-        commit(&self.path, self.comment_style(), &body)
-    }
-
-    fn delete_entries(&self, keys: &[&str]) -> Result<(), String> {
-        let content = read_opt(&self.path)?;
-        if content.trim().is_empty() {
-            return Ok(());
-        }
-        let body = remove(&content, keys, key_of);
-        commit(&self.path, self.comment_style(), &body)
+        let content = remove(&content, removals, key_of);
+        Ok(merge(&content, additions, key_of, render))
     }
 }
 

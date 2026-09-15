@@ -29,6 +29,9 @@ pub fn list_installed() -> Vec<Installed> {
             continue;
         }
         let name = e.file_name().to_string_lossy().to_string();
+        if component::registry::by_component(&name).is_none() {
+            continue;
+        }
         if let Some(ver) = latest_version(&name) {
             out.push(make_installed(&name, &ver));
         }
@@ -39,6 +42,9 @@ pub fn list_installed() -> Vec<Installed> {
 
 /// 按组件名解析已安装实例（取最高版本），未安装报错。
 pub fn resolve(name: &str) -> Result<Installed, String> {
+    if component::registry::by_component(name).is_none() {
+        return Err(format!("不支持的组件: {name}"));
+    }
     latest_version(name)
         .map(|ver| make_installed(name, &ver))
         .ok_or_else(|| format!("组件 {name} 未安装"))
@@ -46,7 +52,7 @@ pub fn resolve(name: &str) -> Result<Installed, String> {
 
 /// 组件是否已安装。
 pub fn is_installed(name: &str) -> bool {
-    latest_version(name).is_some()
+    component::registry::by_component(name).is_some() && latest_version(name).is_some()
 }
 
 /// 扫 `components/<name>/` 下 `<name>-<版本>` 子目录，返回最高版本。
@@ -80,7 +86,7 @@ fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     pa.len().cmp(&pb.len())
 }
 
-/// 组装 Installed；展示名取组件实现，未注册回退为 id。
+/// 组装 Installed；展示名取组件实现。
 fn make_installed(name: &str, version: &str) -> Installed {
     Installed {
         name: name.to_string(),
@@ -98,5 +104,24 @@ mod tests {
         assert_eq!(version_cmp("3.5.0", "3.10.0"), std::cmp::Ordering::Less);
         assert_eq!(version_cmp("4.1.0", "4.1.0"), std::cmp::Ordering::Equal);
         assert_eq!(version_cmp("3.10", "3.5"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn list_installed_ignores_unregistered_component_directories() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-instances-registry-filter");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        std::fs::create_dir_all(paths::instance_dir("hadoop", "3.5.0").unwrap()).unwrap();
+        std::fs::create_dir_all(paths::instance_dir("unknown", "1.0.0").unwrap()).unwrap();
+
+        let installed = list_installed();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "hadoop");
+        assert!(resolve("unknown").is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

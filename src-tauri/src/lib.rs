@@ -51,7 +51,7 @@ pub fn run() {
             app::open_log_file,
             component::list_component_manifests,
             component::list_config_fields,
-            component::set_config_field,
+            component::save_config_fields,
             component::list_component_templates,
             component::start_component,
             component::stop_component,

@@ -3,13 +3,19 @@
     {
       "name": "官方源",
       "version": {
-        "3.5.0": "https://dlcdn.apache.org/hadoop/common/hadoop-3.5.0/hadoop-3.5.0-aarch64.tar.gz"
+        "3.5.0": {
+          "url": "https://dlcdn.apache.org/hadoop/common/hadoop-3.5.0/hadoop-3.5.0-aarch64.tar.gz",
+          "sha256": "1a378fb95c4078ba43e157cb586cd928689e8920a2fb03d43f0674e31d8bc5b1"
+        }
       }
     },
     {
       "name": "清华源",
       "version": {
-        "3.5.0": "https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.5.0/hadoop-3.5.0-aarch64.tar.gz"
+        "3.5.0": {
+          "url": "https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-3.5.0/hadoop-3.5.0-aarch64.tar.gz",
+          "sha256": "1a378fb95c4078ba43e157cb586cd928689e8920a2fb03d43f0674e31d8bc5b1"
+        }
       }
     }
   ],

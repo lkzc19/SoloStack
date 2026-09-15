@@ -1,7 +1,10 @@
 //! 应用与设置：架构、数据根目录、用户设置、日志查看器、app 操作日志、本机 JDK。
 
 use solostack_core::app::{app_log, paths};
+use solostack_core::lifecycle::logs;
 use solostack_core::platform::{app_scan, arch, jdk};
+
+use super::resolve;
 
 #[tauri::command]
 pub fn get_arch() -> String {
@@ -55,7 +58,11 @@ pub fn set_close_to_tray(close_to_tray: bool) -> Result<(), String> {
 ///
 /// 所选应用不可用（如已卸载）时，自动降级为系统默认应用打开（`open <path>`）。
 #[tauri::command]
-pub fn open_log_file(path: String) -> Result<(), String> {
+pub fn open_log_file(component: String, path: String) -> Result<(), String> {
+    let i = resolve(&component)?;
+    let path = logs::validated_log_file(&i.name, &i.version, std::path::Path::new(&path))?
+        .display()
+        .to_string();
     let settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     if !settings.log_viewer.is_empty() {
         let ok = std::process::Command::new("open")

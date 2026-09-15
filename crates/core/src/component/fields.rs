@@ -47,19 +47,6 @@ pub(crate) fn read_java_home(comp: &dyn Component, version: &str) -> Option<Stri
     }
 }
 
-/// 应用 JDK：解析路径 → 写进组件官方环境文件的 JAVA_HOME。
-pub fn apply_jdk(comp: &dyn Component, version: &str, value: &str) -> Result<(), String> {
-    let file = comp.java_env_file().ok_or_else(|| {
-        format!(
-            "组件 {} 没有可承载 JAVA_HOME 的官方配置文件",
-            comp.component()
-        )
-    })?;
-    let home = super::exec::resolve_requested_jdk(value)?;
-    let f = super::open_config(comp.component(), version, file)?;
-    f.set("JAVA_HOME", &home)
-}
-
 // ── 安装参数解析（缺省 / 空串 = 用默认值）────────────────
 
 /// 取一个安装参数；缺省或空串视为未提供。

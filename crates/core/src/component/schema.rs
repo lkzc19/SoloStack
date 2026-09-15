@@ -3,8 +3,10 @@
 //! 后端只向调用方提供「字段当前值 + 按 key 写回」；字段的呈现(布局/文案/控件)
 //! 完全由前端表单决定，后端不携带任何展示信息。
 
-pub use crate::component::ConfigFieldValue;
+use crate::component::exec;
 use crate::component::{fields, registry};
+pub use crate::component::{ConfigFieldUpdate, ConfigFieldValue};
+use crate::config::{self, ConfigPlan};
 
 /// 列出组件的全部配置字段当前值。
 pub fn list_fields(name: &str, version: &str) -> Result<Vec<ConfigFieldValue>, String> {
@@ -19,18 +21,53 @@ pub fn list_fields(name: &str, version: &str) -> Result<Vec<ConfigFieldValue>, S
     Ok(values)
 }
 
-/// 设置字段值；`jdk_version` 走通用 JDK 应用。
-pub fn set_field(name: &str, version: &str, field_id: &str, value: &str) -> Result<(), String> {
+/// 一次保存整组字段；JDK 与组件业务字段统一合并后事务落盘。
+pub fn save_fields(name: &str, version: &str, updates: &[ConfigFieldUpdate]) -> Result<(), String> {
     let Some(c) = registry::by_component(name) else {
         return Err(format!("组件 {name} 未注册，无法设置配置"));
     };
-    if field_id == "jdk_version" {
+
+    let mut seen = std::collections::HashSet::new();
+    for update in updates {
+        if !seen.insert(update.id.as_str()) {
+            return Err(format!("配置字段重复提交: {}", update.id));
+        }
+    }
+
+    let mut plan = ConfigPlan::new();
+    let business: Vec<ConfigFieldUpdate> = updates
+        .iter()
+        .filter(|update| update.id != "jdk_version")
+        .cloned()
+        .collect();
+    if !business.is_empty() {
+        plan.merge(c.plan_field_updates(version, &business)?)?;
+    }
+
+    if let Some(update) = updates.iter().find(|update| update.id == "jdk_version") {
         if !fields::supports_jdk(c) {
             return Err(format!("组件 {name} 没有可配置的 JDK"));
         }
-        return fields::apply_jdk(c, version, value);
+        let file = c
+            .java_env_file()
+            .ok_or_else(|| format!("组件 {name} 没有可承载 JAVA_HOME 的环境文件"))?;
+        let home = exec::resolve_requested_jdk(&update.value)?;
+        plan.set(component_path(name, version, file)?, "JAVA_HOME", home)?;
     }
-    c.set_field(version, field_id, value)
+
+    config::apply_plan(&plan).map_err(|error| {
+        let message = format!("保存 {name} v{version} 配置失败: {error}");
+        let _ = crate::app::app_log::append(crate::app::app_log::ERROR, &message);
+        message
+    })
+}
+
+fn component_path(
+    component: &str,
+    version: &str,
+    file: &str,
+) -> Result<std::path::PathBuf, String> {
+    crate::component::config_path(component, version, file)
 }
 
 #[cfg(test)]

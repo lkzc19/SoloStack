@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use chrono::Local;
+use chrono::{Local, NaiveDate};
 
 use crate::app::paths;
 
@@ -22,7 +22,18 @@ pub fn today() -> String {
 
 /// 指定日期的日志文件：`solostack.log.YYYY-MM-DD`。
 pub fn log_file_for(date: &str) -> Result<PathBuf, String> {
+    validate_date(date)?;
     Ok(log_dir()?.join(format!("solostack.log.{date}")))
+}
+
+/// 严格校验日志日期，只接受 `YYYY-MM-DD`。
+pub fn validate_date(date: &str) -> Result<(), String> {
+    let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| format!("日志日期格式无效: {date}"))?;
+    if parsed.format("%Y-%m-%d").to_string() != date {
+        return Err(format!("日志日期格式无效: {date}"));
+    }
+    Ok(())
 }
 
 /// 当天日志文件（追加写入目标）。
@@ -132,6 +143,14 @@ mod tests {
             Some("2026-09-04")
         );
         assert_eq!(log_date_of("other.log"), None);
+    }
+
+    #[test]
+    fn log_file_rejects_non_date_and_traversal() {
+        assert!(validate_date("2026-09-14").is_ok());
+        assert!(validate_date("2026-9-14").is_err());
+        assert!(validate_date("../../etc/passwd").is_err());
+        assert!(log_file_for("../../etc/passwd").is_err());
     }
 
     #[test]

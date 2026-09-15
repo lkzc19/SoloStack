@@ -46,11 +46,12 @@ crates/core/src/
 │   ├── mod.rs              ← Entry / Format / ConfigFile trait / open / 原子写收口
 │   ├── header.rs           ← 受管说明头的渲染、剥离、注入
 │   ├── line.rs             ← 行式格式共享算法（合并 / 删除 / 精确读）
+│   ├── transaction.rs      ← ConfigPlan 与多文件保存事务
 │   ├── xml.rs              ← <configuration><property> 语义
 │   ├── properties.rs       ← key=value 行式语义（server.properties）
 │   └── shell_env.rs        ← export KEY=VALUE 语义（hadoop-env.sh）
 └── component/
-    ├── schema.rs           ← 字段调度（list_fields / set_field）
+    ├── schema.rs           ← 字段调度（list_fields / save_fields / ConfigPlan）
     └── ...                 ← 组件抽象、各组件实现、实例发现
 ```
 
@@ -94,11 +95,12 @@ pub trait ConfigFile {
     /// 精确读单个键；不存在返回 None。
     fn get(&self, key: &str) -> Result<Option<String>, String>;
 
-    /// 合并写：只改命中键的值、追加缺失的新键，其余内容与注释原样保留。
-    /// 文件不存在或为空时按传入条目创建。
-    fn update_entries(&self, additions: &[Entry]) -> Result<(), String>;
+    /// 在内存中完成合并与删除，返回待提交的完整内容。
+    fn render_entries(&self, additions: &[Entry], removals: &[&str])
+        -> Result<String, String>;
 
-    /// 删除键（如关闭历史服务器时移除 mapreduce.jobhistory.webapp.address）。
+    /// 单文件便捷写：render_entries + commit。
+    fn update_entries(&self, additions: &[Entry]) -> Result<(), String>;
     fn delete_entries(&self, keys: &[&str]) -> Result<(), String>;
 
     // 便捷封装
@@ -202,11 +204,14 @@ Hash 样式（properties / shell_env）：
 
 | 语义 | 方法 | 用途 |
 |---|---|---|
-| 合并写 | `update_entries` | 安装时生成配置、配置页改字段、启动前补齐 —— 全部走这一条 |
-| 删除 | `delete_entries` | 关闭功能时移除键（如历史服务器） |
+| 批量规划 | `ConfigPlan::set/remove/replace_text` | 组件将整组字段变更解析成文件计划 |
+| 事务提交 | `config::apply_plan` | 安装、配置页保存、启动前补齐、JDK 写入统一走这一条 |
+| 格式渲染 | `ConfigFile::render_entries` | 在内存中完成合并/删除，不直接写盘 |
 
-**只有这两条路径**。刻意不提供「整体重写」：安装时官方模板的 `<configuration>` 是空的，
-合并写等价于生成；而一旦允许整体重写，改一个端口就会顺手抹掉模板里的注释与其它默认值。
+底层只提供合并和显式删除，刻意不提供「整体重写」：安装时官方模板的
+`<configuration>` 是空的，合并写等价于生成；而一旦允许整体重写，改一个端口
+就会顺手抹掉模板里的注释与其它默认值。上层通过 `ConfigPlan` 聚合这些变更，
+再统一交给 `apply_plan` 事务提交。
 
 **对用户的承诺「受管键会被重写」是精确的**：应用内改配置会替换该键的值，缺失的受管键会被补齐；
 未受管的键、注释、格式结构一律不动。头部的措辞与此一致，不夸大也不含糊。
@@ -241,6 +246,24 @@ fn commit(path: &Path, style: Option<CommentStyle>, body: &str) -> Result<(), St
 - 临时文件与目标**同目录**（避免跨设备 rename 失败），命名 `.<文件名>.solostack.tmp`。
 - rename 前**继承原文件权限**（不被降级为默认 644）；失败时清理临时文件。
 - 收益：进程崩溃/磁盘满不会留下被截断的配置文件 —— XML 被截断会让组件直接起不来。
+
+### 6.4 一次保存的配置事务
+
+配置页只调用一个入口：
+
+```text
+save_config_fields(component, updates[])
+  → 组件 plan_field_updates()
+  → ConfigPlan
+  → config::apply_plan()
+```
+
+- 组件先校验全部字段，再把变更按文件聚合为 `ConfigPlan`；规划阶段不写盘。
+- 同一个文件的多处修改只渲染一次、只提交一次，说明头也只注入一次。
+- `apply_plan` 先完成全部文件渲染和同目录暂存，再依次替换正式文件。
+- 任一提交失败时，使用事务开始前的文件快照恢复已经替换的文件。
+- 恢复失败会作为高优先级错误返回，并由字段调度层写入 app 错误日志。
+- 当前保证的是进程内失败回滚；崩溃级事务恢复需要后续引入 `.solostack.txn` journal。
 
 ---
 
@@ -341,7 +364,8 @@ fn java_env_file(&self) -> Option<&'static str> { None }
 - [x] ~~**Kafka 的 `config/kraft/server.properties` 在 4.1.0 是否存在**~~ —— 已核实（2026-09-12，查官方 4.1.0 仓库）：
   `config/` 下**没有** `kraft/` 子目录，官方文件是 `config/server.properties`；`config_layout` 已改为 `config`。
 - [x] ~~**Kafka KRaft 首启是否需要 `kafka-storage.sh format`**~~ —— 已确认需要，且已实现（2026-09-12）：
-  在 `Kafka::start` 里做首启格式化（与 hadoop 的 `namenode -format` 同一套路，不新增框架钩子）：
+  Hadoop 与 Kafka 都把首启格式化实现在 `Runtime::init`，由 `service::start` 在启动前调用
+  （与 hadoop 的 `namenode -format` 同一套生命周期时序）：
   `kafka-storage.sh random-uuid` → `format --standalone -t <uuid> -c <server.properties>`。
   **`--standalone` 不能省**：组合模式（`process.roles=broker,controller`）单节点未配 quorum voters 时，
   StorageTool 要求三选一（`--standalone` / `--initial-controllers` / `--no-initial-controllers`）。
@@ -349,11 +373,11 @@ fn java_env_file(&self) -> Option<&'static str> { None }
 - [x] ~~**Kafka 的 JDK 选择无处持久化**~~ —— 已解决（2026-09-12）：生成 `config/solostack-env.sh` 作为落点，见 §7.3。
   顺带修正：4.x 的 quorum 引导键是 `controller.quorum.bootstrap.servers`（旧的 `controller.quorum.voters`
   在 3.9 起被 KIP-853 取代）；`advertised.listeners` 须与 `listeners` 端口同步，否则改端口后客户端会拿到旧端口。
-- [ ] **Kafka 仍未实机装过**：上述全部依据官方仓库源码/模板核对（4.3.1 已重核），尚未跑过一次真实安装+启停。
+- [x] ~~**Kafka 仍未实机装过**~~ → 2026-09-14 已完成真实安装和启停验证；源码/模板结论与实际运行一致。
 
 ### 9.1 清单维护（血的教训）
 
-`package/manifest/<组件>.json` 里存的是**每个源各自的完整 URL**，所以「某版本在某个源上还在不在」必须逐个核对：
+`package/manifest/<组件>.json` 里存的是**每个源各自的完整 URL 与 SHA256**，所以「某版本在某个源上还在不在」必须逐个核对：
 
 - `dlcdn.apache.org` **只保留各版本线的最新补丁版**，旧版会被移出；清华镜像策略相同。
   实测（2026-09-13）：Kafka 4.1.0 在 dlcdn 与清华**双双 404**，而 4.1.2 / 4.2.1 / 4.3.1 两边都有。

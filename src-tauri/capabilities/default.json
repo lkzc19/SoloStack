@@ -6,6 +6,19 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "opener:default"
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$HOME/.solostack" },
+        { "path": "$HOME/.solostack/**" }
+      ]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "http://localhost:*" },
+        { "url": "https://localhost:*" }
+      ]
+    }
   ]
 }

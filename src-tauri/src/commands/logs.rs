@@ -21,9 +21,6 @@ pub fn read_component_log_tail(
 ) -> Result<String, String> {
     let i = resolve(&component)?;
     let log_path = std::path::PathBuf::from(&path);
-    logs::ensure_within_root(&log_path)?;
-    if !logs::is_log_of(&i.name, &i.version, &log_path) {
-        return Err(format!("日志路径不属于组件 {component}"));
-    }
+    let log_path = logs::validated_log_file(&i.name, &i.version, &log_path)?;
     logs::tail(&log_path, lines)
 }

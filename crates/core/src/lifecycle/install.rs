@@ -10,7 +10,7 @@ use crate::package::extract;
 /// 安装进度事件。
 #[derive(Clone, Debug)]
 pub enum ProgressEvent {
-    /// 检查包是否已下载（true = 已存在，将跳过下载）。
+    /// 检查本地缓存（true = 文件存在，将在下载阶段校验 SHA256）。
     Checking(bool),
     /// 下载中（已下载字节, 总字节；total 可能为 0）。
     Downloading(u64, u64),
@@ -55,17 +55,17 @@ pub fn install(
     };
 
     // 2. 从下载源解析完整地址，下载到 var/downloads/（支持取消；已下载则复用）
-    let url = crate::package::manifest::resolve_url(name, &config.source_id, version)?;
-    let cached = download::target_path(&url)?.exists();
+    let artifact = crate::package::manifest::resolve_artifact(name, &config.source_id, version)?;
+    let cached = download::target_path(&artifact.url)?.exists();
     emit(&shared, ProgressEvent::Checking(cached));
     let _ = crate::app::app_log::append(
         crate::app::app_log::INFO,
         &format!(
             "{name} v{version} {}",
             if cached {
-                "包已存在，跳过下载"
+                "发现缓存包，开始 SHA256 校验"
             } else {
-                "包不存在，开始下载"
+                "未发现缓存包，开始下载"
             }
         ),
     );
@@ -79,7 +79,7 @@ pub fn install(
         }
         None => None,
     };
-    let archive = match download::download(&url, dl_progress, cancel) {
+    let archive = match download::download(&artifact.url, &artifact.sha256, dl_progress, cancel) {
         Ok(a) => a,
         Err(e) => {
             let _ = crate::app::app_log::append(
@@ -177,7 +177,9 @@ fn apply_java_home(
     let home =
         crate::component::exec::resolve_jdk_for_install(c, &config.version, &config.jdk_version)?;
     let path = crate::component::config_path(name, &config.version, env_file)?;
-    crate::config::open(path)?.set("JAVA_HOME", &home)
+    let mut plan = crate::config::ConfigPlan::new();
+    plan.set(path, "JAVA_HOME", home)?;
+    crate::config::apply_plan(&plan)
 }
 
 /// 安装阶段（用于清理守卫判断哪些产物已被本次安装改动）。

@@ -4,48 +4,39 @@
 //! 以及调用方给的 HADOOP_CONF_DIR 之类）在这一层完成。
 
 use std::path::PathBuf;
-use std::process::Child;
+use std::time::Duration;
 
 use super::Component;
 use crate::app::paths;
 use crate::package::manifest;
 use crate::platform::{jdk, process};
 
-/// 在组件实例目录下运行脚本，注入 JAVA_HOME 与调用方给的组件环境变量。
+/// 在组件实例目录下执行脚本并检查结果。
 ///
-/// 子进程结束即失效，不修改任何全局配置。
-pub fn run_script(
+/// 注入 JAVA_HOME 与调用方给的组件环境变量；非零退出或超时时返回错误。
+pub fn run_checked(
     comp: &dyn Component,
     version: &str,
     script: &str,
     args: &[&str],
     envs: &[(&str, &str)],
-) -> Result<Child, String> {
+    timeout: Duration,
+) -> Result<process::ScriptOutput, String> {
     let (dir, envs) = prepare(comp, version, envs)?;
     let refs = as_refs(&envs);
-    process::run_script_in(&dir, script, args, &refs)
+    process::run_script_in(&dir, script, args, &refs, timeout)
 }
 
-/// 同 `run_script`，但等待脚本结束并返回其标准输出（用于需要读 stdout 的脚本，
-/// 如 `kafka-storage.sh random-uuid`）。退出码非 0 时报错并带上 stderr。
+/// 执行脚本并返回标准输出（如 `kafka-storage.sh random-uuid`）。
 pub fn run_to_string(
     comp: &dyn Component,
     version: &str,
     script: &str,
     args: &[&str],
     envs: &[(&str, &str)],
+    timeout: Duration,
 ) -> Result<String, String> {
-    let (dir, envs) = prepare(comp, version, envs)?;
-    let refs = as_refs(&envs);
-    let out = process::output_in(&dir, script, args, &refs)?;
-    if !out.status.success() {
-        return Err(format!(
-            "脚本 {script} 执行失败（{}）: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    Ok(run_checked(comp, version, script, args, envs, timeout)?.stdout)
 }
 
 /// 解析实例目录 + 组装环境变量（含按需注入的 JAVA_HOME）。

@@ -1,8 +1,8 @@
 //! 组件抽象层：把组件差异收敛为多能力 trait + 每组件模块 + 静态注册表。
 //!
 //! 流程层(install / service / 命令层)只依赖 `Component` trait，不再写 `match name`
-//! 组件分支。新增组件 = package/manifest/<component>.json + component/<component>/
-//! + registry 里加一行。
+//! 组件分支。新增**后端组件** = package/manifest/<component>.json + component/<component>/
+//! + registry 里加一行。进入发布支持列表还必须在 `src/lib/component-adapters/` 完成前端适配。
 //!
 //! 命名约定：`<component>` 指组件名（hadoop / kafka）。**不要用 `id` 指代组件名** ——
 //! `id` 在项目里另有用途（安装参数 id、服务 id、实例标识等）。
@@ -19,7 +19,7 @@ pub mod instances;
 pub mod install_config;
 pub(crate) mod ports;
 pub mod registry;
-/// 配置字段调度：向后端其他层暴露「列出字段值 / 按 key 写回」。
+/// 配置字段调度：向后端其他层暴露「列出字段值 / 批量规划并保存」。
 pub mod schema;
 
 // 内置组件实现：每个组件一个目录，目录内按「配置 / 运行」分文件。
@@ -27,19 +27,24 @@ pub mod schema;
 pub(crate) mod hadoop;
 pub(crate) mod kafka;
 
-pub use dto::{ConfigFieldValue, ConfigLayout, WebUi};
+pub use dto::{ConfigFieldUpdate, ConfigFieldValue, ConfigLayout, WebUi};
 pub use install_config::{InstallParam, InstallParams};
 
 use std::path::PathBuf;
 
-use crate::config::{self, ConfigFile};
+use crate::config::{self, ConfigFile, ConfigPlan};
+use crate::platform::process::ServiceSpec;
 
-/// 配置字段能力：向前端提供「字段当前值」，并按 key 写回（校验与读写归组件）。
+/// 配置字段能力：向前端提供「字段当前值」，并为整组字段变更生成写入计划。
 pub trait FieldSchema {
     /// 全部可配置字段的当前值（呈现与布局由前端表单决定，这里只提供数据）。
     fn field_values(&self, version: &str) -> Vec<ConfigFieldValue>;
-    /// 写回某个字段（field_id 不会是 "jdk_version"，通用 JDK 由调度层处理）。
-    fn set_field(&self, version: &str, field_id: &str, value: &str) -> Result<(), String>;
+    /// 校验整组字段并生成文件写入计划；plan 阶段不允许写盘。
+    fn plan_field_updates(
+        &self,
+        version: &str,
+        updates: &[ConfigFieldUpdate],
+    ) -> Result<ConfigPlan, String>;
 }
 
 /// 配置生命周期：配置布局 / 探活端口 / 安装生成 / 启动前校验补齐 / JDK 落点。
@@ -81,8 +86,16 @@ pub trait ConfigLifecycle {
 
 /// 运行生命周期：启停序列 / WebUI。
 pub trait Runtime {
+    /// 首次运行初始化；必须幂等，由生命周期层在 `start` 前调用。
+    fn init(&self, _version: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn start(&self, version: &str) -> Result<(), String>;
     fn stop(&self, version: &str) -> Result<(), String>;
+    /// 该组件实例预期运行的服务、进程命令行特征和监听端口。
+    fn service_specs(&self, _version: &str) -> Vec<ServiceSpec> {
+        Vec::new()
+    }
     /// WebUI 跳转地址(从配置精确读出的端口推导)，默认无。
     fn web_uis(&self, _version: &str) -> Vec<WebUi> {
         Vec::new()

@@ -8,7 +8,7 @@ use serde::Serialize;
 /// （`ConfigLifecycle::install_params` + `apply_install_config`）；
 /// 共享契约里不再出现任何组件专属字段，命令层也只做透传。
 ///
-/// 值统一用字符串：与配置页 `set_config_field` 的约定一致，组件用
+/// 值统一用字符串：与配置页 `save_config_fields` 的约定一致，组件用
 /// `component::fields::param_*` 解析并校验（缺省 / 空串 = 用默认值）。
 pub type InstallParams = BTreeMap<String, String>;
 

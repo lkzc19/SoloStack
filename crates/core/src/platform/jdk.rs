@@ -18,11 +18,38 @@ pub struct Jdk {
 /// 结果按主版本号升序排列。
 pub fn scan() -> Vec<Jdk> {
     let mut jdks = Vec::new();
+    if let Some(home) = std::env::var_os("JAVA_HOME").map(PathBuf::from) {
+        if let Some(jdk) = jdk_from_env_home(&home) {
+            jdks.push(jdk);
+        }
+    }
     for dir in candidate_dirs() {
         scan_dir(&dir, &mut jdks);
     }
-    jdks.sort_by(|a, b| a.version.cmp(&b.version));
+    jdks.sort_by(|a, b| {
+        a.version
+            .cmp(&b.version)
+            .then_with(|| a.path.cmp(&b.path))
+            // 同一路径同时由扫描目录和环境变量发现时，保留名称更完整的扫描结果。
+            .then_with(|| (a.name == "JAVA_HOME").cmp(&(b.name == "JAVA_HOME")))
+    });
+    jdks.dedup_by(|a, b| a.path == b.path);
     jdks
+}
+
+/// 把当前 `JAVA_HOME` 作为候选，支持 CI 使用 setup-java 注入的 JDK。
+fn jdk_from_env_home(home: &Path) -> Option<Jdk> {
+    let version = read_release_version(home)?;
+    Some(Jdk {
+        name: "JAVA_HOME".to_string(),
+        version,
+        path: home.to_path_buf(),
+        vendor: infer_vendor(
+            home.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("JAVA_HOME"),
+        ),
+    })
 }
 
 /// 三个候选扫描位置（macOS 惯例）。
@@ -237,6 +264,21 @@ mod tests {
             assert!(!j.version.is_empty());
             assert!(j.path.is_dir());
         }
+    }
+
+    #[test]
+    fn env_home_layout_parses_release_file() {
+        let tmp = std::env::temp_dir().join("solostack-jdk-env-home");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("release"), "JAVA_VERSION=\"17.0.18\"\n").unwrap();
+
+        let jdk = jdk_from_env_home(&tmp).unwrap();
+        assert_eq!(jdk.name, "JAVA_HOME");
+        assert_eq!(jdk.version, "17");
+        assert_eq!(jdk.path, tmp);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

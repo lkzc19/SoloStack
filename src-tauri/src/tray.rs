@@ -36,22 +36,94 @@ pub fn setup<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
 
 /// 显示并聚焦主窗口；从托盘恢复时同时恢复 Dock 图标。
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+    if let Err(error) = show_main_window_result(app) {
+        report_tray_error(&format!("显示应用失败: {error}"));
+    }
+}
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+fn show_main_window_result<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+        errors.push(format!("恢复 Dock 图标失败: {error}"));
+    }
+
+    match app.get_webview_window("main") {
+        Some(window) => {
+            if let Err(error) = window.show() {
+                errors.push(format!("显示主窗口失败: {error}"));
+            }
+            if let Err(error) = window.unminimize() {
+                errors.push(format!("取消最小化失败: {error}"));
+            }
+            if let Err(error) = window.set_focus() {
+                errors.push(format!("聚焦主窗口失败: {error}"));
+            }
+        }
+        None => errors.push("未找到主窗口".to_string()),
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
     }
 }
 
 /// 隐藏主窗口；macOS 下切换为无 Dock 图标的托盘型应用。
 pub fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    if let Err(error) = hide_main_window_result(app) {
+        report_tray_error(&format!("隐藏主窗口失败: {error}"));
+    }
+}
 
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+fn hide_main_window_result<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+        errors.push(format!("切换托盘型应用失败: {error}"));
+    }
+
+    match app.get_webview_window("main") {
+        Some(window) => {
+            if let Err(error) = window.hide() {
+                errors.push(format!("隐藏主窗口失败: {error}"));
+            }
+        }
+        None => errors.push("未找到主窗口".to_string()),
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
+fn report_tray_error(message: &str) {
+    eprintln!("{message}");
+    let _ = solostack_core::app::app_log::append(solostack_core::app::app_log::ERROR, message);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_errors_are_written_to_app_log() {
+        let tmp = std::env::temp_dir().join("solostack-tray-error-log");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        report_tray_error("测试托盘错误");
+
+        let logs =
+            solostack_core::app::app_log::read_logs_for(&solostack_core::app::app_log::today())
+                .unwrap();
+        assert!(logs.contains("ERROR 测试托盘错误"), "{logs}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -59,8 +59,8 @@ lifecycle ──► component ──► config / package / platform / app
 | 下载（源解析 / 缓存 / 进度 / 取消 / 清理） | 配置布局 `config_layout`（官方配置目录 + 受管文件清单） |
 | 解压（单层根目录处理、重装清旧目录） | 探活端口 `detect_ports`（从配置精确读）+ 端口避让 |
 | InstallGuard 失败回滚（清已建实例目录） | 启停脚本序列 `start` / `stop` |
-| 状态探活（全开=Running / 部分=Partial / 全关=Stopped） | 配置字段 schema `field_values` / `set_field` |
-| 配置布局校验（启动前确认受管文件都在） | 首启 init/format（各组件在自己 start 里幂等执行，见 §C） |
+| 状态探活（进程身份 + 端口归属 = Running / 部分 = Partial / 冲突 = Error） | 配置字段 schema `field_values` / `plan_field_updates` |
+| 配置布局校验（启动前确认受管文件都在） | 首启 init/format（`Runtime::init` 由 `service::start` 在启动前调用，见 §C） |
 | JAVA_HOME 读写（写进组件声明的环境文件：官方优先，无官方文件的由 SoloStack 生成） | WebUI 入口 `web_uis` |
 | 配置文件**读写机制**（`config/`：Xml / Properties / ShellEnv） | JAVA_HOME 落点声明 `java_env_file` |
 
@@ -137,11 +137,14 @@ lifecycle ──► component ──► config / package / platform / app
 1. **安装时生成** —— `apply_install_config`
 2. **启动前校验 / 补齐**（幂等）—— `ensure_config`：先校验布局文件都在（缺失报错），
    再从配置**读回**当前生效值合并写回（只补缺失键，不改已有值）
-3. **页面修改字段** → 重启生效 —— `set_field`
+3. **页面修改字段** → 重启生效 —— `save_fields` → `plan_field_updates` → `ConfigPlan`
 
 三个时机作用于**同一份官方配置文件**，没有副本、没有 install.json，配置文件就是唯一事实源。
 
-### C. 首启 init/format（当前：各组件在自己的 start 里做，幂等）
+### C. 首启 init/format
+
+FIX-08 已把首启初始化拆为 `Runtime::init(version)`，由 `service::start` 在真正启动进程前调用。
+
 | 组件 | 首启动作 | 幂等信号（**官方产物**，不造标记文件） | 目标目录来源 |
 |---|---|---|---|
 | hadoop | `bin/hdfs namenode -format -force` | `dfs.namenode.name.dir/current/VERSION` | 配置精确读 |
@@ -158,9 +161,11 @@ lifecycle ──► component ──► config / package / platform / app
    **但「写入」相反**：数据目录键由 SoloStack 拥有，始终写受管路径 —— 否则官方模板里的
    占位值会被回声采纳（Kafka 的 `/tmp/kraft-combined-logs`，系统清理 /tmp 后即丢数据）。
 
-- 目前**没有**框架级 `init` 钩子：两个组件都在自己的 `Runtime::start` 里判断执行
-  （跑「启动」时顺带幂等初始化，行为可观测、可重入）。
-- 待议：若第三个组件也需要首启初始化，再把这段提升为 `ConfigLifecycle::init(version)`，由框架在首次启动前调用。
+- 统一时序为：`prepare_config → Runtime::init → Runtime::start`。
+- `init` 必须幂等；每次启动都可以调用，组件根据官方产物决定是否真正格式化。
+- 两个组件的 init 内容不同：Hadoop 是一条 format 命令；Kafka 是获取 UUID 后再执行
+  `format --standalone`。框架只统一调用时机，不强行统一内部命令模板。
+- `init` 失败时 `start` 不得执行，避免启动未初始化的组件。
 
 ### D. 运行期（可反复、有依赖序）
 | 行为 | 归属 |
@@ -211,15 +216,14 @@ fn try_start(s: &mut OpState) -> Result<(), String> {
 
 | trait 方法 | 对应阶段 |
 |---|---|
-| `FieldSchema::field_values / set_field` | 配置读 / 修改（B3） |
+| `FieldSchema::field_values / plan_field_updates` | 配置读 / 批量规划（B3） |
 | `ConfigLifecycle::config_layout` | 官方配置目录 + 受管文件清单 |
 | `ConfigLifecycle::detect_ports` | 探活端口（从配置精确读） |
 | `ConfigLifecycle::apply_install_config` | 安装生成初始配置 + 端口（A） |
 | `ConfigLifecycle::ensure_config` | 启动前校验 / 补齐（B2） |
 | `ConfigLifecycle::java_env_file` | JAVA_HOME 落点声明（A） |
-| `Runtime::start / stop` | 运行期（D） |
 | `Runtime::web_uis` | WebUI |
-| （暂缺，见 §C）`init(version)` | 首启初始化 —— 当前由各组件的 `start` 自行幂等处理 |
+| `Runtime::init / start / stop` | 首启初始化（幂等）与运行期（D） |
 
 ---
 
@@ -227,12 +231,12 @@ fn try_start(s: &mut OpState) -> Result<(), String> {
 
 - [x] ~~Kafka KRaft 首启是否需要 `kafka-storage.sh format`~~ → 需要，已实现（见 §C）
 - [x] ~~Kafka 配置目录是否仍是 `config/kraft/`~~ → 否，已改为 `config`（4.1.0 核实、4.3.1 复核同形）
-- [ ] **Kafka 尚未实机装过**：路径/键名/format 参数均据官方仓库源码核对（4.3.1），仍需一次真实安装+启停验证
+- [x] ~~**Kafka 尚未实机装过**~~ → 2026-09-14 已手动完成真实安装、KRaft format、启动和停止验证；未来回归由 FIX-08 的 CI smoke test 持续覆盖
 - [ ] 清单版本会随镜像漂移（dlcdn/清华只留各线最新补丁版，旧版 404）—— 上架版本时逐源核对，见 `docs/Config-File-Design.md` §9.1
-- [ ] 是否给 trait 增加首启 `init` hook（等第三个组件需要时再提取，见 §C）
+- [x] ~~是否给 trait 增加首启 `init` hook~~ → 需要：Hadoop/Kafka 已共有该阶段，FIX-08 统一为 `Runtime::init`，不再等待第三个组件
 - [x] ~~安装参数是否 schema 化（移除 `HadoopPorts` / `KafkaConfig` 每组件 DTO）~~ → 已完成（见 §1.1）：通用 `InstallParams` + 组件 `install_params` 声明，命令层零镜像 DTO
 - [ ] `category` 字段删除 or 作分组预留（已在 `ComponentInfo` 中移除）
-- [ ] 配置保存从「逐字段串行」改为一次批量原子提交
+- [x] ~~配置保存从「逐字段串行」改为一次批量原子提交~~ → 已完成：`save_config_fields` + `ConfigPlan` + 运行时失败回滚
 
 ---
 
@@ -240,6 +244,10 @@ fn try_start(s: &mut OpState) -> Result<(), String> {
 
 | 日期 | 决策 |
 |---|---|
+| 2026-09-14 | **系统边界收紧**：组件日志只允许当前实例目录内的真实 `log/out/err` 文件；app 日志日期严格校验；Tauri 启用生产/开发 CSP；opener 仅允许本地 WebUI 和 `~/.solostack` 路径。 |
+| 2026-09-14 | **运行状态加入进程身份验证**：当前实例以 `component + version` 标识，组件声明预期 `ServiceKey`、进程命令行特征和监听端口；状态由匹配进程和端口归属共同推导，不再只看端口开放。 |
+| 2026-09-14 | **前端组件适配注册表**：前端以类型安全 `ComponentAdapter` 集中声明 Logo、安装表单、配置表单和字段契约；后端 manifest、registry 与前端 adapter 集合必须完全一致，未完整适配的组件不进入发布支持列表。 |
+| 2026-09-14 | **托盘错误可观测**：窗口显示/隐藏和 Dock 切换不再吞错，失败写入 app 日志；托盘图标经观感评估后保留原应用图标。 |
 | 2026-09-08 | 组件差异多 trait 化（FieldSchema / ConfigLifecycle / Runtime + 静态注册表）；流程层不再写组件 match。 |
 | 2026-09-08 | XML/properties 读写收敛到 `conf.rs` 的 `ConfigFile`（read/write/update_entries）。 |
 | 2026-09-09 | 全生命周期设计采用「机制通用、内容独立」分层 + 「操作状态 / 派生状态」两层模型。 |
@@ -250,5 +258,6 @@ fn try_start(s: &mut OpState) -> Result<(), String> {
 | 2026-09-13 | **安装参数 schema 化**：`InstallConfig` 收成 `{component, version, source_id, jdk_version, params}`；组件用 `install_params(version)` 声明参数与默认值、`apply_install_config` 自行解析校验；命令层删除 `HadoopPorts`/`KafkaConfig` 与手抄映射，安装页默认值改由 `list_install_params` 提供（表单布局仍按组件定制，不做通用化）。 |
 | 2026-09-13 | **审查后修复批次**：数据目录写受管路径/判断读配置、端口校验（0、特权端口、同组件判重）、JobHistory 关闭后改端口空操作、XML 注释区屏蔽、路径校验拒绝 `..`、下载 `.part` 原子落盘、解压暂存目录命名、JDK 策略唯一化、配置页执行 `ensure_config`。详见 `docs/Config-File-Design.md`。 |
 | 2026-09-13 | **首启 init 统一为「官方产物 + 配置精确读」**：删掉 hadoop 的 `.formatted` 标记文件，改用 `dfs.namenode.name.dir/current/VERSION`；两个组件的判断目录都改为从配置精确读（原按默认路径拼，手改配置后会错位，hadoop 侧会导致每次启动重格式化）。 |
+| 2026-09-14 | **首启初始化独立为 `Runtime::init`**：`service::start` 固定执行 `prepare_config → init → start`；init 失败不会启动常驻进程。新增真实 Hadoop/Kafka 生命周期 smoke test 和发布前 CI 验证。 |
 | 2026-09-12 | **Kafka 按 4.1.0 官方事实修正**：配置目录 `config/kraft`→`config`、quorum 键 `voters`→`bootstrap.servers`、受管 `advertised.listeners`、首启补 `kafka-storage.sh format --standalone`；Kafka 的 JAVA_HOME 落盘在 SoloStack 生成的 `config/solostack-env.sh`（无官方环境文件）。 |
 | 2026-09-12 | **组件实现改为每组件一个目录**：`component/<component>/{mod,config,runtime}.rs` —— 框架文件与组件实现分离，组件内部按框架的两条主线（配置 / 运行）分文件。新增组件路径更新为 `package/manifest/<component>.json` + `component/<component>/` + registry 加一行。 |

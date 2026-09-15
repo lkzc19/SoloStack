@@ -70,10 +70,36 @@ jobs:
 
       - run: npm ci
       - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: npm run check # svelte-check
+      - run: npm run build # 静态前端产物
+
+  # 真实安装、格式化、启停、二次启动和卸载；失败时禁止出包。
+  smoke:
+    needs: guard
+    uses: ./.github/workflows/lifecycle-smoke.yml
+
+  # 发布前额外验证不在 bundle 模式下也能完成 debug 构建。
+  debug-build:
+    needs: [resolve, test, smoke]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - run: npm run tauri build -- --debug --no-bundle
 
   build:
-    needs: [resolve, test]
+    needs: [resolve, test, smoke, debug-build]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

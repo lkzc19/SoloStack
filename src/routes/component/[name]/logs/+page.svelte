@@ -57,7 +57,7 @@
 
   async function openLogFile(path: string) {
     try {
-      await invoke("open_log_file", { path });
+      await invoke("open_log_file", { component: name, path });
     } catch (e) {
       store.errorMsg = String(e);
     }

@@ -3,13 +3,19 @@
     {
       "name": "官方源",
       "version": {
-        "4.3.1": "https://dlcdn.apache.org/kafka/4.3.1/kafka_2.13-4.3.1.tgz"
+        "4.3.1": {
+          "url": "https://dlcdn.apache.org/kafka/4.3.1/kafka_2.13-4.3.1.tgz",
+          "sha256": "f118328b2d053497350d5befd82c08db7ffd710327ff52943dd5caaa1b25db21"
+        }
       }
     },
     {
       "name": "清华源",
       "version": {
-        "4.3.1": "https://mirrors.tuna.tsinghua.edu.cn/apache/kafka/4.3.1/kafka_2.13-4.3.1.tgz"
+        "4.3.1": {
+          "url": "https://mirrors.tuna.tsinghua.edu.cn/apache/kafka/4.3.1/kafka_2.13-4.3.1.tgz",
+          "sha256": "f118328b2d053497350d5befd82c08db7ffd710327ff52943dd5caaa1b25db21"
+        }
       }
     }
   ],

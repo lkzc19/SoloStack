@@ -9,6 +9,13 @@ pub struct ConfigFieldValue {
     pub value: String,
 }
 
+/// 一次配置保存中的单个字段变更。
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+pub struct ConfigFieldUpdate {
+    pub id: String,
+    pub value: String,
+}
+
 /// 组件配置文件的布局：官方配置目录 + 受管文件清单。
 ///
 /// 配置直接读写解压包里的官方文件，不另存副本；`files` 用于启动前校验与

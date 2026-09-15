@@ -29,6 +29,7 @@ mod header;
 mod line;
 mod properties;
 mod shell_env;
+mod transaction;
 mod xml;
 
 use header::{inject, strip};
@@ -36,6 +37,7 @@ use header::{inject, strip};
 pub use header::{HEADER_BEGIN, HEADER_END};
 pub use properties::PropertiesFile;
 pub use shell_env::ShellEnvFile;
+pub use transaction::{apply_plan, ConfigPlan};
 pub use xml::XmlFile;
 
 /// 一个键值条目（不同格式的公共语义单位）。
@@ -126,10 +128,28 @@ pub trait ConfigFile {
 
     /// 合并写：只改命中键的值、追加缺失的新键，其余内容与注释原样保留。
     /// 文件不存在或为空时按传入条目创建（并注入受管头部）。
-    fn update_entries(&self, additions: &[Entry]) -> Result<(), String>;
+    fn update_entries(&self, additions: &[Entry]) -> Result<(), String> {
+        if additions.is_empty() {
+            return Ok(());
+        }
+        let body = self.render_entries(additions, &[])?;
+        commit(self.path(), self.comment_style(), &body)
+    }
 
     /// 删除键（不存在的键忽略）。
-    fn delete_entries(&self, keys: &[&str]) -> Result<(), String>;
+    fn delete_entries(&self, keys: &[&str]) -> Result<(), String> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let body = self.render_entries(&[], keys)?;
+        if body.trim().is_empty() {
+            return Ok(());
+        }
+        commit(self.path(), self.comment_style(), &body)
+    }
+
+    /// 在内存中生成合并/删除后的完整文件内容，不写盘。
+    fn render_entries(&self, additions: &[Entry], removals: &[&str]) -> Result<String, String>;
 
     /// 便捷：设单个键（= `update_entries`）。
     fn set(&self, key: &str, value: &str) -> Result<(), String> {
@@ -184,6 +204,12 @@ pub fn resolve_path(raw: &str, base: &Path) -> Option<PathBuf> {
 
 /// 统一收口：剥旧头部 → 注入新头部 → 原子写。各格式实现只负责拼出 body。
 pub(super) fn commit(path: &Path, style: Option<CommentStyle>, body: &str) -> Result<(), String> {
+    let out = prepare_content(style, body);
+    write_atomic(path, &out)
+}
+
+/// 加上受管头部并统一末尾换行。
+pub(super) fn prepare_content(style: Option<CommentStyle>, body: &str) -> String {
     let mut lines = lines_of(body);
     strip(&mut lines);
     if let Some(style) = style {
@@ -193,7 +219,7 @@ pub(super) fn commit(path: &Path, style: Option<CommentStyle>, body: &str) -> Re
     if !out.is_empty() {
         out.push('\n');
     }
-    write_atomic(path, &out)
+    out
 }
 
 /// 按行拆分：去掉末尾换行后切分，不产生幽灵空行（重复写入保持稳定）。
@@ -226,14 +252,6 @@ fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         format!("替换 {} 失败: {e}", path.display())
     })
-}
-
-/// 原子写一份**非键值**文本文件（如 hadoop 的 `workers` 主机列表）。
-///
-/// 这类文件不是 `key=value`，无法走 `ConfigFile`，但仍应复用同一套原子写，
-/// 否则就成了「所有落盘统一走收口」的唯一例外。
-pub fn write_text(path: &Path, content: &str) -> Result<(), String> {
-    write_atomic(path, content)
 }
 
 /// 读文件；不存在返回空串（按空配置处理）。

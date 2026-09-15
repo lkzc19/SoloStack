@@ -4,7 +4,6 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     AlertCircle,
-    Database,
     FileText,
     HardDrive,
     Play,
@@ -13,7 +12,7 @@
     SlidersHorizontal,
     Square,
   } from "lucide-svelte";
-  import ComponentLogo from "$lib/ComponentLogo.svelte";
+  import { componentAdapter } from "$lib/component-adapters/registry";
   import Button from "$lib/components/ui/button/button.svelte";
   import { store, startComponent, stopComponent } from "$lib/stores.svelte.ts";
 
@@ -106,12 +105,14 @@
 <main class="content">
   <div class="component-list">
     {#each store.components as component, i (component.name)}
+      {@const adapter = componentAdapter(component.name)}
+      {@const starting = store.busy && store.busyAction === "start" && store.busyComponent === component.name}
+      {@const stopping = store.busy && store.busyAction === "stop" && store.busyComponent === component.name}
       <div class="component-row" style={"--i:" + i}>
         <span class="component-logo {component.status}">
-          {#if component.name === "hadoop" || component.name === "kafka"}
-            <ComponentLogo name={component.name} />
-          {:else}
-            <Database size={20} />
+          {#if adapter}
+            {@const Logo = adapter.logo}
+            <Logo />
           {/if}
         </span>
         <div class="component-info">
@@ -126,11 +127,17 @@
               {/each}
             {/if}
           </div>
-          <span class="component-meta mono">v{component.version} · {component.statusText}</span>
+          <span class="component-meta mono">
+            v{component.version} · {starting ? "启动中" : stopping ? "停止中" : component.statusText}
+          </span>
         </div>
         <div class="row-actions">
-          {#if component.status === "running" || component.status === "partial"}
-            {@const stopping = store.busy && store.busyAction === "stop" && store.busyComponent === component.name}
+          {#if starting || stopping}
+            <Button variant="secondary" size="sm" class="w-auto" disabled>
+              <span class="log-spinner"></span>
+              {starting ? "启动中…" : "停止中…"}
+            </Button>
+          {:else if component.status === "running" || component.status === "partial"}
             <Button
               variant="destructive"
               size="sm"
@@ -138,27 +145,18 @@
               onclick={() => stopComponent(component.name)}
               disabled={store.busy}
             >
-              {#if stopping}
-                <span class="log-spinner"></span>
-              {:else}
-                <Square size={14} />
-              {/if}
-              {stopping ? "停止中…" : "停止"}
+              <Square size={14} />
+              停止
             </Button>
           {:else}
-            {@const starting = store.busy && store.busyAction === "start" && store.busyComponent === component.name}
             <Button
               size="sm"
               class="w-auto"
               onclick={() => startComponent(component.name)}
               disabled={store.busy}
             >
-              {#if starting}
-                <span class="log-spinner"></span>
-              {:else}
-                <Play size={14} />
-              {/if}
-              {starting ? "启动中…" : "启动"}
+              <Play size={14} />
+              启动
             </Button>
           {/if}
           <button class="icon-btn" onclick={() => openComponentConfig(component.name)} title="配置">

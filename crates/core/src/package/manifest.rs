@@ -3,7 +3,9 @@
 /// 每种组件一份清单文件（`manifest/<component>.json`），随 app 内置分发。
 /// 结构：
 /// ```json
-/// { "source": [{ "name": "官方源", "version": { "3.5.0": "URL" } }],
+/// { "source": [{ "name": "官方源", "version": {
+///   "3.5.0": { "url": "URL", "sha256": "..." }
+/// } }],
 ///   "java_support": { "3.5.0": [17, 21] } }
 /// ```
 use std::collections::BTreeMap;
@@ -34,8 +36,15 @@ pub fn needs_java(component_id: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceDef {
     pub name: String,
-    /// 版本 → 完整下载地址。
-    pub version: BTreeMap<String, String>,
+    /// 版本 → 安装包地址与固定摘要。
+    pub version: BTreeMap<String, ArtifactDef>,
+}
+
+/// 一个可下载安装包。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactDef {
+    pub url: String,
+    pub sha256: String,
 }
 
 /// 内置组件清单（组件名, json）。
@@ -64,8 +73,12 @@ pub fn by_component(component: &str) -> Result<Manifest, String> {
         .ok_or_else(|| format!("未找到组件清单: {component}"))
 }
 
-/// 解析该组件某下载源下某版本的完整下载地址。
-pub fn resolve_url(component_id: &str, source_name: &str, version: &str) -> Result<String, String> {
+/// 解析该组件某下载源下某版本的安装包定义。
+pub fn resolve_artifact(
+    component_id: &str,
+    source_name: &str,
+    version: &str,
+) -> Result<ArtifactDef, String> {
     let m = by_component(component_id)?;
     let src = m
         .source
@@ -76,6 +89,11 @@ pub fn resolve_url(component_id: &str, source_name: &str, version: &str) -> Resu
         .get(version)
         .cloned()
         .ok_or_else(|| format!("下载源 {source_name} 无 {component_id} {version} 的下载地址"))
+}
+
+/// 便捷解析完整下载地址。
+pub fn resolve_url(component_id: &str, source_name: &str, version: &str) -> Result<String, String> {
+    Ok(resolve_artifact(component_id, source_name, version)?.url)
 }
 
 #[cfg(test)]
@@ -102,6 +120,8 @@ mod tests {
     fn resolve_url_hadoop_3_5_0() {
         let url = resolve_url("hadoop", "官方源", "3.5.0").unwrap();
         assert!(url.ends_with("hadoop-3.5.0-aarch64.tar.gz"));
+        let artifact = resolve_artifact("hadoop", "官方源", "3.5.0").unwrap();
+        assert_eq!(artifact.sha256.len(), 64);
         assert!(resolve_url("hadoop", "清华源", "3.5.0").is_ok());
         assert!(resolve_url("hadoop", "官方源", "9.9.9").is_err());
         assert!(resolve_url("nope", "官方源", "3.5.0").is_err());
@@ -139,12 +159,37 @@ mod tests {
         // 防历史教训：URL 里混入非 ASCII 乱码（如 ß 混进域名）导致下载失败
         for m in load_all().unwrap() {
             for src in &m.source {
-                for url in src.version.values() {
+                for artifact in src.version.values() {
                     assert!(
-                        url.is_ascii(),
-                        "{} {} URL 含非 ASCII 字符: {url}",
+                        artifact.url.is_ascii(),
+                        "{} {} URL 含非 ASCII 字符: {}",
                         m.component,
-                        src.name
+                        src.name,
+                        artifact.url
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn artifact_sha256_is_valid_and_shared_by_sources() {
+        for m in load_all().unwrap() {
+            let first = &m.source[0];
+            for (version, artifact) in &first.version {
+                assert_eq!(artifact.sha256.len(), 64, "{version} SHA256 长度错误");
+                assert!(
+                    artifact
+                        .sha256
+                        .chars()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                    "{version} SHA256 必须是小写十六进制"
+                );
+                for src in &m.source[1..] {
+                    assert_eq!(
+                        src.version[version].sha256, artifact.sha256,
+                        "{} 的 {version} 在不同下载源摘要不一致",
+                        m.component
                     );
                 }
             }

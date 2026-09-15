@@ -1,6 +1,6 @@
 //! 组件查询与启停：已安装列表、运行状态、启停、WebUI 入口、配置字段、托管目录、组件清单。
 
-use solostack_core::component::{self, instances, registry, schema};
+use solostack_core::component::{self, instances, registry, schema, ConfigFieldUpdate};
 use solostack_core::lifecycle::service;
 use solostack_core::package::manifest;
 
@@ -22,10 +22,15 @@ pub fn list_component_templates() -> Result<Vec<ComponentInfo>, String> {
 
 /// 组件运行状态。
 #[tauri::command]
-pub fn get_component_status(component: String) -> Result<ComponentStatusInfo, String> {
+pub async fn get_component_status(component: String) -> Result<ComponentStatusInfo, String> {
     let i = resolve(&component)?;
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        service::component_status(&i.name, &i.version)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(ComponentStatusInfo {
-        status: status_str(&service::component_status(&i.name, &i.version)),
+        status: status_str(&status),
     })
 }
 
@@ -75,11 +80,14 @@ pub fn list_config_fields(component: String) -> Result<Vec<schema::ConfigFieldVa
     schema::list_fields(&i.name, &i.version)
 }
 
-/// 设置组件的某个语义化配置字段。
+/// 一次保存组件的整组语义化配置字段。
 #[tauri::command]
-pub fn set_config_field(component: String, field_id: String, value: String) -> Result<(), String> {
+pub fn save_config_fields(
+    component: String,
+    updates: Vec<ConfigFieldUpdate>,
+) -> Result<(), String> {
     let i = resolve(&component)?;
-    schema::set_field(&i.name, &i.version, &field_id, &value)
+    schema::save_fields(&i.name, &i.version, &updates)
 }
 
 /// 获取组件各托管目录路径。
@@ -119,7 +127,11 @@ pub fn list_component_manifests() -> Result<Vec<ManifestInfo>, String> {
                 .into_iter()
                 .map(|s| SourceDefInfo {
                     name: s.name,
-                    versions: s.version,
+                    versions: s
+                        .version
+                        .into_iter()
+                        .map(|(version, artifact)| (version, artifact.url))
+                        .collect(),
                 })
                 .collect(),
             java_support: m.java_support,

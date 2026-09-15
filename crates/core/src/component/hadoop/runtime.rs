@@ -1,44 +1,103 @@
 //! Hadoop 的运行期：首启 NameNode 格式化、启停序列、WebUI 入口。
 
+use std::time::Duration;
+
 use super::config::{self, Effective};
 use super::{Hadoop, NAME};
 use crate::app::paths;
 use crate::component::exec;
 use crate::component::{self, Runtime, WebUi};
+use crate::platform::process::ServiceSpec;
+
+const DAEMON_TIMEOUT: Duration = Duration::from_secs(60);
+const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Runtime for Hadoop {
-    fn start(&self, version: &str) -> Result<(), String> {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::INFO,
-            &format!("启动组件 {NAME} v{version}"),
-        );
+    fn init(&self, version: &str) -> Result<(), String> {
         format_namenode_if_needed(version)?;
+        Ok(())
+    }
+
+    fn start(&self, version: &str) -> Result<(), String> {
         // 直接用 --daemon 启动各进程，绕过 start-dfs/start-yarn 内部的 SSH 依赖。
         // 顺序：namenode → datanode → resourcemanager → nodemanager → historyserver
         run_daemon(version, "bin/hdfs", &["--daemon", "start", "namenode"])?;
         run_daemon(version, "bin/hdfs", &["--daemon", "start", "datanode"])?;
-        run_daemon(version, "bin/yarn", &["--daemon", "start", "resourcemanager"])?;
+        run_daemon(
+            version,
+            "bin/yarn",
+            &["--daemon", "start", "resourcemanager"],
+        )?;
         run_daemon(version, "bin/yarn", &["--daemon", "start", "nodemanager"])?;
         if config::history_enabled(version) {
-            run_daemon(version, "bin/mapred", &["--daemon", "start", "historyserver"])?;
+            run_daemon(
+                version,
+                "bin/mapred",
+                &["--daemon", "start", "historyserver"],
+            )?;
         }
         Ok(())
     }
 
     fn stop(&self, version: &str) -> Result<(), String> {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::INFO,
-            &format!("停止组件 {NAME} v{version}"),
-        );
         // 逆序停止：historyserver → nodemanager → resourcemanager → datanode → namenode
         if config::history_enabled(version) {
-            run_daemon(version, "bin/mapred", &["--daemon", "stop", "historyserver"])?;
+            run_daemon(
+                version,
+                "bin/mapred",
+                &["--daemon", "stop", "historyserver"],
+            )?;
         }
         run_daemon(version, "bin/yarn", &["--daemon", "stop", "nodemanager"])?;
-        run_daemon(version, "bin/yarn", &["--daemon", "stop", "resourcemanager"])?;
+        run_daemon(
+            version,
+            "bin/yarn",
+            &["--daemon", "stop", "resourcemanager"],
+        )?;
         run_daemon(version, "bin/hdfs", &["--daemon", "stop", "datanode"])?;
         run_daemon(version, "bin/hdfs", &["--daemon", "stop", "namenode"])?;
         Ok(())
+    }
+
+    fn service_specs(&self, version: &str) -> Vec<ServiceSpec> {
+        let eff = Effective::from_config(version);
+        let root = paths::instance_dir(NAME, version)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| NAME.to_string());
+        let service = |key, class: &str, ports: Vec<u16>| {
+            ServiceSpec::new(key, vec![root.clone(), class.to_string()], ports)
+        };
+
+        let mut specs = vec![
+            service(
+                "namenode",
+                "org.apache.hadoop.hdfs.server.namenode.NameNode",
+                vec![eff.nn_web, config::NAMENODE_RPC],
+            ),
+            service(
+                "datanode",
+                "org.apache.hadoop.hdfs.server.datanode.DataNode",
+                vec![eff.dn_http],
+            ),
+            service(
+                "resourcemanager",
+                "org.apache.hadoop.yarn.server.resourcemanager.ResourceManager",
+                vec![eff.rm_web],
+            ),
+            service(
+                "nodemanager",
+                "org.apache.hadoop.yarn.server.nodemanager.NodeManager",
+                vec![eff.nm_web],
+            ),
+        ];
+        if let Some(history) = eff.history {
+            specs.push(service(
+                "jobhistory",
+                "org.apache.hadoop.mapreduce.v2.hs.JobHistoryServer",
+                vec![history],
+            ));
+        }
+        specs
     }
 
     fn web_uis(&self, version: &str) -> Vec<WebUi> {
@@ -89,24 +148,33 @@ fn format_namenode_if_needed(version: &str) -> Result<(), String> {
         &format!("首次启动 {NAME} v{version}，格式化 NameNode"),
     );
 
-    let mut child = run(version, "bin/hdfs", &["namenode", "-format", "-force"])?;
-    let out = child.wait().map_err(|e| format!("等待格式化失败: {e}"))?;
-    if !out.success() {
-        return Err("NameNode 格式化失败".to_string());
-    }
+    run_command(
+        version,
+        "bin/hdfs",
+        &["namenode", "-format", "-force"],
+        FORMAT_TIMEOUT,
+    )
+    .map_err(|e| format!("NameNode 格式化失败: {e}"))?;
     Ok(())
 }
 
-/// 运行组件脚本并等待结束（用于格式化等同步操作）。
-fn run(version: &str, script: &str, args: &[&str]) -> Result<std::process::Child, String> {
+/// 执行组件脚本并检查退出码。
+fn run_command(
+    version: &str,
+    script: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(), String> {
     let conf = component::config_dir(NAME, version)?.display().to_string();
-    exec::run_script(
+    exec::run_checked(
         &Hadoop,
         version,
         script,
         args,
         &[("HADOOP_CONF_DIR", &conf)],
+        timeout,
     )
+    .map(|_| ())
 }
 
 /// 以 `--daemon` 模式运行组件脚本：等待命令退出并检查退出码。
@@ -114,17 +182,7 @@ fn run(version: &str, script: &str, args: &[&str]) -> Result<std::process::Child
 /// `hdfs/yarn/mapred --daemon start/stop` 会 fork 到后台后立即退出，
 /// 不依赖 SSH，适合纯本机伪分布式场景。
 fn run_daemon(version: &str, script: &str, args: &[&str]) -> Result<(), String> {
-    let mut child = run(version, script, args)?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("等待 {script} {} 失败: {e}", args.join(" ")))?;
-    if !status.success() {
-        return Err(format!(
-            "{script} {} 失败（退出码 {status}）",
-            args.join(" ")
-        ));
-    }
-    Ok(())
+    run_command(version, script, args, DAEMON_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -191,5 +249,61 @@ mod tests {
         assert!(format_namenode_if_needed("3.5.0").is_ok());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn run_daemon_checks_success_and_failure() {
+        let _guard = lock();
+        let tmp = std::env::temp_dir().join("solostack-hadoop-daemon-failure");
+        let _ = std::fs::remove_dir_all(&tmp);
+        setup(&tmp, None);
+
+        let instance = paths::instance_dir(NAME, "3.5.0").unwrap();
+        let config = component::config_dir(NAME, "3.5.0").unwrap();
+        let bin = instance.join("bin");
+        let jdk = tmp.join("fake-jdk");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&jdk).unwrap();
+        std::fs::write(
+            config.join("hadoop-env.sh"),
+            format!("export JAVA_HOME={}\n", jdk.display()),
+        )
+        .unwrap();
+        let script = bin.join("fake-daemon.sh");
+        std::fs::write(&script, "printf 'daemon ok\\n'\nexit 0\n").unwrap();
+        assert!(run_daemon("3.5.0", "bin/fake-daemon.sh", &["start", "namenode"]).is_ok());
+
+        std::fs::write(
+            &script,
+            "printf 'daemon stdout\\n'\nprintf 'daemon failed\\n' >&2\nexit 8\n",
+        )
+        .unwrap();
+
+        let err = run_daemon("3.5.0", "bin/fake-daemon.sh", &["start", "namenode"]).unwrap_err();
+        assert!(err.contains("执行失败"), "{err}");
+        assert!(err.contains("daemon stdout"), "{err}");
+        assert!(err.contains("daemon failed"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn service_specs_cover_hadoop_daemons() {
+        let _guard = lock();
+        let tmp = std::env::temp_dir().join("solostack-hadoop-service-specs");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let specs = Hadoop.service_specs("3.5.0");
+        let keys: Vec<&str> = specs.iter().map(|spec| spec.key).collect();
+        assert_eq!(
+            keys,
+            vec!["namenode", "datanode", "resourcemanager", "nodemanager"]
+        );
+        assert!(specs[0].ports.contains(&8020));
+        assert!(specs.iter().all(|spec| spec
+            .process_needles
+            .iter()
+            .any(|needle| needle.contains("hadoop-3.5.0"))));
     }
 }

@@ -1,6 +1,10 @@
 // SoloStack 前端共享类型定义
+import type { Component } from "svelte";
 
 export type Status = "running" | "stopped" | "partial" | "error" | "not_installed";
+
+/** 已完整适配前端界面的组件。新增组件时必须同步扩展此联合类型。 */
+export type SupportedComponent = "hadoop" | "kafka";
 
 /** 外观主题模式：浅色 / 深色 / 跟随系统。 */
 export type ThemeMode = "light" | "dark" | "system";
@@ -28,6 +32,11 @@ export interface UiComponent extends ComponentInfo {
 
 export interface ConfigProperty {
   name: string;
+  value: string;
+}
+
+export interface ConfigFieldUpdate {
+  id: string;
   value: string;
 }
 
@@ -89,4 +98,35 @@ export interface ComponentDirs {
   config: string;
   data: string;
   log: string;
+}
+
+export interface LogoProps {
+  class?: string;
+}
+
+export interface InstallFieldsProps {
+  component: SupportedComponent;
+  version: string;
+  params: Record<string, string>;
+  onParamChange: (id: string, value: string) => void;
+}
+
+export interface ConfigFieldsProps {
+  component: SupportedComponent;
+  version: string;
+  values: Record<string, string>;
+  jdks: JdkInfo[];
+  onFieldChange: (id: string, value: string) => void;
+}
+
+/** 组件专属 UI 与后端字段契约的唯一前端入口。 */
+export interface ComponentAdapter {
+  id: SupportedComponent;
+  order: number;
+  displayName: string;
+  logo: Component<LogoProps>;
+  installFields: Component<InstallFieldsProps>;
+  configFields: Component<ConfigFieldsProps>;
+  expectedInstallParamIds: (version: string) => readonly string[];
+  expectedConfigFieldIds: (version: string) => readonly string[];
 }

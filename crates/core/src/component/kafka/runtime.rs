@@ -1,36 +1,59 @@
 //! Kafka 的运行期：首启 KRaft 格式化、启停序列。
 //! Kafka 无 WebUI（用 `Runtime` 的默认空实现）。
 
-use super::config::F_PROPS;
+use std::time::Duration;
+
+use super::config::{read_broker, BROKER_DEFAULT, F_PROPS};
 use super::{Kafka, NAME};
+use crate::app::paths;
 use crate::component::exec;
 use crate::component::{self, Runtime};
+use crate::platform::process::ServiceSpec;
+
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Runtime for Kafka {
-    fn start(&self, version: &str) -> Result<(), String> {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::INFO,
-            &format!("启动组件 {NAME} v{version}"),
-        );
+    fn init(&self, version: &str) -> Result<(), String> {
         format_storage_if_needed(version)?;
+        Ok(())
+    }
+
+    fn start(&self, version: &str) -> Result<(), String> {
         let conf = component::config_path(NAME, version, F_PROPS)?;
-        exec::run_script(
+        exec::run_checked(
             &Kafka,
             version,
             "bin/kafka-server-start.sh",
             &["-daemon", conf.to_str().unwrap_or_default()],
             &[],
+            COMMAND_TIMEOUT,
         )?;
         Ok(())
     }
 
     fn stop(&self, version: &str) -> Result<(), String> {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::INFO,
-            &format!("停止组件 {NAME} v{version}"),
-        );
-        exec::run_script(&Kafka, version, "bin/kafka-server-stop.sh", &[], &[])?;
+        exec::run_checked(
+            &Kafka,
+            version,
+            "bin/kafka-server-stop.sh",
+            &[],
+            &[],
+            COMMAND_TIMEOUT,
+        )?;
         Ok(())
+    }
+
+    fn service_specs(&self, version: &str) -> Vec<ServiceSpec> {
+        let root = paths::instance_dir(NAME, version)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|_| NAME.to_string());
+        let needles = vec![root, "kafka.Kafka".to_string()];
+        let broker = read_broker(version).unwrap_or(BROKER_DEFAULT);
+        vec![
+            ServiceSpec::new("broker", needles.clone(), [broker]),
+            ServiceSpec::new("controller", needles, [super::CONTROLLER_PORT]),
+        ]
     }
 }
 
@@ -62,6 +85,7 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
         "bin/kafka-storage.sh",
         &["random-uuid"],
         &[],
+        FORMAT_TIMEOUT,
     )?;
     let cluster_id = cluster_id.trim();
     if cluster_id.is_empty() {
@@ -83,6 +107,7 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
             conf.to_str().unwrap_or_default(),
         ],
         &[],
+        FORMAT_TIMEOUT,
     )?;
     Ok(())
 }
@@ -90,6 +115,36 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn setup_fake_instance(tmp: &std::path::Path) {
+        std::env::set_var("HOME", tmp);
+        let instance = crate::app::paths::instance_dir(NAME, "4.3.1").unwrap();
+        let config = component::config_dir(NAME, "4.3.1").unwrap();
+        let bin = instance.join("bin");
+        let jdk = tmp.join("fake-jdk");
+        let log_dir = super::super::config::managed_log_dir("4.3.1").unwrap();
+
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&jdk).unwrap();
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("meta.properties"), "version=1\n").unwrap();
+        std::fs::write(
+            config.join("solostack-env.sh"),
+            format!("export JAVA_HOME={}\n", jdk.display()),
+        )
+        .unwrap();
+        std::fs::write(
+            bin.join("kafka-server-start.sh"),
+            "printf 'start stdout\\n'\nprintf 'start failed\\n' >&2\nexit 7\n",
+        )
+        .unwrap();
+        std::fs::write(
+            bin.join("kafka-server-stop.sh"),
+            "printf 'stop stdout\\n'\nprintf 'stop failed\\n' >&2\nexit 9\n",
+        )
+        .unwrap();
+    }
 
     #[test]
     fn format_is_skipped_when_meta_properties_exists() {
@@ -107,5 +162,38 @@ mod tests {
         assert!(format_storage_if_needed("4.3.1").is_ok());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn start_and_stop_return_script_failure_output() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-kafka-runtime-failure");
+        let _ = std::fs::remove_dir_all(&tmp);
+        setup_fake_instance(&tmp);
+
+        let start_err = Kafka.start("4.3.1").unwrap_err();
+        assert!(start_err.contains("执行失败"), "{start_err}");
+        assert!(start_err.contains("start stdout"), "{start_err}");
+        assert!(start_err.contains("start failed"), "{start_err}");
+
+        let stop_err = Kafka.stop("4.3.1").unwrap_err();
+        assert!(stop_err.contains("执行失败"), "{stop_err}");
+        assert!(stop_err.contains("stop stdout"), "{stop_err}");
+        assert!(stop_err.contains("stop failed"), "{stop_err}");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn service_specs_share_combined_kafka_process() {
+        let specs = Kafka.service_specs("4.3.1");
+        let keys: Vec<&str> = specs.iter().map(|spec| spec.key).collect();
+        assert_eq!(keys, vec!["broker", "controller"]);
+        assert_eq!(specs[0].process_needles, specs[1].process_needles);
+        assert!(specs.iter().all(|spec| spec
+            .process_needles
+            .iter()
+            .any(|needle| needle == "kafka.Kafka")));
     }
 }

@@ -8,7 +8,7 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use super::{commit, read_opt, ConfigFile, Entry, Format};
+use super::{read_opt, ConfigFile, Entry, Format};
 
 pub struct XmlFile {
     path: PathBuf,
@@ -38,23 +38,23 @@ impl ConfigFile for XmlFile {
         find_property(&read_opt(&self.path)?, key)
     }
 
-    fn update_entries(&self, additions: &[Entry]) -> Result<(), String> {
+    fn render_entries(&self, additions: &[Entry], removals: &[&str]) -> Result<String, String> {
         let original = read_opt(&self.path)?;
+        let original = if removals.is_empty() || original.trim().is_empty() {
+            original
+        } else {
+            remove(&original, removals)?
+        };
         let body = if original.trim().is_empty() {
-            create_body(additions)
+            if additions.is_empty() {
+                String::new()
+            } else {
+                create_body(additions)
+            }
         } else {
             patch(&original, additions)?
         };
-        commit(&self.path, self.comment_style(), &body)
-    }
-
-    fn delete_entries(&self, keys: &[&str]) -> Result<(), String> {
-        let original = read_opt(&self.path)?;
-        if original.trim().is_empty() {
-            return Ok(());
-        }
-        let body = remove(&original, keys)?;
-        commit(&self.path, self.comment_style(), &body)
+        Ok(body)
     }
 }
 

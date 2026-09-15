@@ -1,10 +1,14 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
 use crate::app::paths;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// 下载进度回调（接收已下载字节数 + 总字节数，total 可能为 0 表示未知）。
 pub type ProgressFn = Box<dyn FnMut(u64, u64)>;
@@ -23,30 +27,39 @@ pub fn target_path(url: &str) -> Result<PathBuf, String> {
 /// 下载单个文件到下载缓存目录（`data_root/downloads/`）。
 ///
 /// - `url`：完整下载地址（由下载源文件 + 组件 + 版本解析）
+/// - `expected_sha256`：manifest 固定的 SHA256
 /// - `progress`：可选进度回调
 /// - `cancel`：取消标志，置位后中止下载并删除**未下载完**的部分文件
 ///
-/// 返回下载后的完整文件路径。若包已存在于 `downloads/` 则直接复用（不重复下载）。
+/// 返回下载后的完整文件路径。缓存文件校验通过才复用；无效缓存会删除并重新下载。
 /// 取消时返回 `Err("安装已取消")`。
 pub fn download(
     url: &str,
+    expected_sha256: &str,
     mut progress: Option<ProgressFn>,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    validate_expected_sha256(expected_sha256)?;
     let target = target_path(url)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    // 已下载过：直接复用缓存包，跳过下载。
-    // 只有「完整下载后 rename 到最终路径」的文件才会出现在这里 —— 半截文件带 .part 后缀，
-    // 不会被误判为可用缓存（否则用户会一直卡在「包已存在」+ 解压失败，且无提示）。
+    // 已下载过：校验通过才复用，损坏文件自动删除并重新下载。
     if target.exists() {
-        return Ok(target);
+        match verify_sha256(&target, expected_sha256) {
+            Ok(()) => return Ok(target),
+            Err(_) => {
+                std::fs::remove_file(&target)
+                    .map_err(|e| format!("删除损坏缓存 {} 失败: {e}", target.display()))?;
+            }
+        }
     }
     let part = part_path(&target);
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("SoloStack/0.1.0 (macOS; aarch64) Like Mozilla/5.0")
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(DOWNLOAD_TIMEOUT)
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
     let resp = client
@@ -59,6 +72,7 @@ pub fn download(
     let total = resp.content_length().unwrap_or(0);
 
     let mut out = std::fs::File::create(&part).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
     let mut downloaded: u64 = 0;
     let mut stream = resp;
     let mut buf = [0u8; 64 * 1024];
@@ -84,6 +98,7 @@ pub fn download(
             let _ = std::fs::remove_file(&part);
             return Err(e.to_string());
         }
+        hasher.update(&buf[..n]);
         downloaded += n as u64;
         if let Some(cb) = progress.as_mut() {
             cb(downloaded, total);
@@ -96,6 +111,15 @@ pub fn download(
         return Err(e.to_string());
     }
     drop(out);
+
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!(
+            "SHA256 校验失败: 期望 {expected_sha256}, 实际 {actual}"
+        ));
+    }
+
     std::fs::rename(&part, &target).map_err(|e| {
         let _ = std::fs::remove_file(&part);
         format!("保存 {} 失败: {e}", target.display())
@@ -115,19 +139,47 @@ fn part_path(target: &std::path::Path) -> PathBuf {
 
 /// 计算文件 SHA256（十六进制小写）。
 pub fn sha256_of(path: &std::path::Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// 校验文件 SHA256 与期望值是否一致。
 pub fn verify_sha256(path: &std::path::Path, expected: &str) -> Result<(), String> {
+    validate_expected_sha256(expected)?;
     let actual = sha256_of(path)?;
     if actual.eq_ignore_ascii_case(expected) {
         Ok(())
     } else {
         Err(format!("SHA256 校验失败: 期望 {expected}, 实际 {actual}"))
+    }
+}
+
+/// 缓存文件是否存在且 SHA256 正确。
+pub fn is_cached(url: &str, expected_sha256: &str) -> Result<bool, String> {
+    validate_expected_sha256(expected_sha256)?;
+    let target = target_path(url)?;
+    if !target.is_file() {
+        return Ok(false);
+    }
+    Ok(verify_sha256(&target, expected_sha256).is_ok())
+}
+
+fn validate_expected_sha256(expected: &str) -> Result<(), String> {
+    if expected.len() == 64 && expected.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(format!("无效的 SHA256: {expected}"))
     }
 }
 
@@ -218,6 +270,52 @@ mod tests {
 
         assert!(victim.is_file(), "不得删除托管目录外的文件");
         assert!(!dir.join("keep.tgz").exists(), "合法项应被删除");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sha256_streaming_matches_known_value() {
+        let path = std::env::temp_dir().join("solostack-download-sha256.txt");
+        std::fs::write(&path, "abc").unwrap();
+        assert_eq!(
+            sha256_of(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sha256_validation_rejects_malformed_expected_value() {
+        let path = std::env::temp_dir().join("solostack-download-sha256-invalid.txt");
+        std::fs::write(&path, "abc").unwrap();
+        assert!(verify_sha256(&path, "not-a-hash").is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cache_is_valid_only_when_sha256_matches() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-download-cache-check");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::env::set_var("HOME", &tmp);
+
+        let url = "https://example.com/package.tgz";
+        let target = target_path(url).unwrap();
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "abc").unwrap();
+
+        assert!(is_cached(
+            url,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        )
+        .unwrap());
+        assert!(!is_cached(
+            url,
+            "f118328b2d053497350d5befd82c08db7ffd710327ff52943dd5caaa1b25db21"
+        )
+        .unwrap());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -122,13 +122,17 @@ pub fn list_install_params(component: String, version: String) -> Vec<InstallPar
 
 /// 该组件某源某版本的包是否已下载（安装页版本下拉展示用）。
 #[tauri::command]
-pub fn is_package_downloaded(
+pub async fn is_package_downloaded(
     component: String,
     source_id: String,
     version: String,
 ) -> Result<bool, String> {
-    let url = manifest::resolve_url(&component, &source_id, &version)?;
-    Ok(download::target_path(&url)?.exists())
+    let artifact = manifest::resolve_artifact(&component, &source_id, &version)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        download::is_cached(&artifact.url, &artifact.sha256)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 列出 `var/downloads/` 下所有已下载的包（名称 + 大小），供设置-缓存 tab 展示。

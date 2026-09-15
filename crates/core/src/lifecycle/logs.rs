@@ -66,6 +66,42 @@ pub fn is_log_of(name: &str, version: &str, path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 校验并返回可安全打开的组件日志文件。
+///
+/// 同时检查组件归属、日志扩展名、真实文件和符号链接目标，防止通过日志页
+/// 读取组件目录之外的文件。
+pub fn validated_log_file(
+    name: &str,
+    version: &str,
+    path: &std::path::Path,
+) -> Result<PathBuf, String> {
+    if !is_log_of(name, version, path) {
+        return Err(format!("日志路径不属于组件 {name}"));
+    }
+    let valid_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext, "log" | "out" | "err"));
+    if !valid_extension {
+        return Err(format!("不支持的日志文件类型: {}", path.display()));
+    }
+    if !path.is_file() {
+        return Err(format!("日志文件不存在: {}", path.display()));
+    }
+
+    let root = paths::var_log_instance_dir(name, version)
+        .map_err(|e| e.to_string())?
+        .canonicalize()
+        .map_err(|e| format!("解析日志目录失败: {e}"))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("解析日志路径失败: {e}"))?;
+    if !canonical.starts_with(&root) {
+        return Err(format!("日志路径超出组件日志目录: {}", path.display()));
+    }
+    Ok(canonical)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +157,49 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(is_log_of("hadoop", "3.5.0", &files[0]));
         assert!(!is_log_of("kafka", "4.1.0", &files[0]));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validated_log_file_rejects_cross_component_and_wrong_extension() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-logs-validated");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let hadoop = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
+        let kafka = paths::var_log_instance_dir("kafka", "4.3.1").unwrap();
+        std::fs::create_dir_all(&hadoop).unwrap();
+        std::fs::create_dir_all(&kafka).unwrap();
+        std::fs::write(hadoop.join("hadoop.log"), "ok\n").unwrap();
+        std::fs::write(kafka.join("kafka.log"), "ok\n").unwrap();
+        std::fs::write(hadoop.join("secret.txt"), "no\n").unwrap();
+
+        assert!(validated_log_file("hadoop", "3.5.0", &hadoop.join("hadoop.log")).is_ok());
+        assert!(validated_log_file("hadoop", "3.5.0", &kafka.join("kafka.log")).is_err());
+        assert!(validated_log_file("hadoop", "3.5.0", &hadoop.join("secret.txt")).is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validated_log_file_rejects_symlink_escape() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-logs-symlink");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let root = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = tmp.join("outside.log");
+        std::fs::write(&outside, "secret\n").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape.log")).unwrap();
+
+        assert!(validated_log_file("hadoop", "3.5.0", &root.join("escape.log")).is_err());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
