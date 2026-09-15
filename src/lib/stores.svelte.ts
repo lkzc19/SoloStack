@@ -19,7 +19,7 @@ export const store = $state({
   components: [] as UiComponent[],
   selectedName: "",
   rootDir: "",
-  appVersion: "0.1.0",
+  appVersion: "",
   busy: false,
   busyAction: "", // 当前操作："start" / "stop" / "uninstall" / ""
   busyComponent: "", // 当前操作的组件名
@@ -124,10 +124,10 @@ export async function boot() {
   initTheme();
   try {
     store.appVersion = await getVersion();
-    await loadMain();
   } catch (e) {
-    store.errorMsg = String(e);
+    store.errorMsg = `读取应用版本失败: ${e}`;
   }
+  await loadMain();
 }
 
 export async function loadMain() {

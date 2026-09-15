@@ -1,10 +1,23 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { openPath } from "@tauri-apps/plugin-opener";
+  import { relaunch } from "@tauri-apps/plugin-process";
+  import { check, type Update } from "@tauri-apps/plugin-updater";
   import { Folder } from "lucide-svelte";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { Popover } from "bits-ui";
-  import { AppWindow, Check, ChevronDown, ExternalLink, Globe, Monitor, Moon, RefreshCw, Sun } from "lucide-svelte";
+  import {
+    AppWindow,
+    Check,
+    ChevronDown,
+    Download,
+    ExternalLink,
+    Globe,
+    Monitor,
+    Moon,
+    RefreshCw,
+    Sun,
+  } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
   import DatePicker from "$lib/components/date-picker.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
@@ -27,8 +40,25 @@
   let closeToTray = $state(true);
   let openEditor = $state(false);
   let openRefresh = $state(false);
+  let updateStatus = $state<
+    "idle" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "error"
+  >("idle");
+  let updateVersion = $state("");
+  let updateDate = $state("");
+  let updateNotes = $state("");
+  let updateDownloaded = $state(0);
+  let updateTotal = $state(0);
+  let pendingUpdate: Update | null = null;
 
   const currentEditor = $derived(apps.find((a) => a.bundle_id === logViewer) ?? null);
+  const updateProgress = $derived(
+    updateTotal > 0 ? Math.min(100, Math.round((updateDownloaded / updateTotal) * 100)) : 0
+  );
+  const updateProgressText = $derived(
+    updateTotal > 0
+      ? `${fmtBytes(updateDownloaded)} / ${fmtBytes(updateTotal)}`
+      : fmtBytes(updateDownloaded)
+  );
   const refreshItems = $derived([
     { value: "0", label: "不刷新" },
     { value: "5", label: "5 秒" },
@@ -43,6 +73,10 @@
 
   onMount(() => {
     loadSettings();
+  });
+
+  onDestroy(() => {
+    void pendingUpdate?.close();
   });
 
   async function loadSettings() {
@@ -178,6 +212,79 @@
       await openPath(`${root}/var/downloads`);
     } catch {
       store.errorMsg = "无法打开下载目录";
+    }
+  }
+
+  async function checkForUpdate() {
+    if (
+      updateStatus === "checking" ||
+      updateStatus === "downloading" ||
+      updateStatus === "installing"
+    ) {
+      return;
+    }
+
+    if (pendingUpdate) {
+      await pendingUpdate.close().catch(() => {});
+      pendingUpdate = null;
+    }
+
+    updateStatus = "checking";
+    updateVersion = "";
+    updateDate = "";
+    updateNotes = "";
+    updateDownloaded = 0;
+    updateTotal = 0;
+    store.errorMsg = "";
+
+    try {
+      const update = await check({ timeout: 30_000 });
+      if (!update) {
+        updateStatus = "up-to-date";
+        return;
+      }
+
+      pendingUpdate = update;
+      updateVersion = update.version;
+      updateDate = update.date ?? "";
+      updateNotes = update.body ?? "";
+      updateStatus = "available";
+    } catch (e) {
+      updateStatus = "error";
+      store.errorMsg = `检查更新失败: ${e}`;
+    }
+  }
+
+  function formatUpdateDate(value: string) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  }
+
+  async function installUpdate() {
+    if (!pendingUpdate || updateStatus === "downloading" || updateStatus === "installing") {
+      return;
+    }
+
+    updateStatus = "downloading";
+    updateDownloaded = 0;
+    updateTotal = 0;
+    store.errorMsg = "";
+
+    try {
+      await pendingUpdate.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          updateTotal = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress") {
+          updateDownloaded += event.data.chunkLength;
+        } else if (event.event === "Finished") {
+          updateStatus = "installing";
+        }
+      });
+      updateStatus = "installing";
+      await relaunch();
+    } catch (e) {
+      updateStatus = "error";
+      store.errorMsg = `安装更新失败: ${e}`;
     }
   }
 </script>
@@ -409,7 +516,9 @@
               <img class="about-logo" src="/icons/solo-logo.png" alt="SoloStack" />
               <div class="about-name">SoloStack</div>
             </div>
-            <span class="version-badge mono">版本 v{store.appVersion}</span>
+            <span class="version-badge mono">
+              {store.appVersion ? `版本 v${store.appVersion}` : "版本未知"}
+            </span>
           </div>
           <div class="about-actions">
             <Button variant="outline" size="sm"><Globe size={14} />官方网站</Button>
@@ -422,9 +531,75 @@
               GitHub
             </Button>
             <Button variant="outline" size="sm"><ExternalLink size={14} />更新日志</Button>
-            <Button variant="outline" size="sm"><RefreshCw size={14} />检查更新</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={checkForUpdate}
+              disabled={updateStatus === "checking" ||
+                updateStatus === "downloading" ||
+                updateStatus === "installing"}
+            >
+              <RefreshCw size={14} class={updateStatus === "checking" ? "spin" : ""} />
+              {updateStatus === "checking" ? "检查中…" : "检查更新"}
+            </Button>
           </div>
         </div>
+        {#if updateStatus !== "idle"}
+          <div class="update-panel">
+            {#if updateStatus === "checking"}
+              <div class="update-heading">
+                <RefreshCw size={15} class="spin" />
+                <span>正在检查更新…</span>
+              </div>
+            {:else if updateStatus === "up-to-date"}
+              <div class="update-heading">
+                <Check size={15} />
+                <span>已是最新版本</span>
+              </div>
+            {:else if updateStatus === "available"}
+              <div class="update-heading">
+                <Download size={15} />
+                <span>发现新版本 v{updateVersion}</span>
+              </div>
+              {#if updateDate}
+                <p class="update-meta">发布于 {formatUpdateDate(updateDate)}</p>
+              {/if}
+              {#if updateNotes}
+                <p class="update-notes">{updateNotes}</p>
+              {/if}
+              <div class="update-actions">
+                <Button size="sm" onclick={installUpdate}>
+                  <Download size={14} />
+                  下载并安装
+                </Button>
+              </div>
+            {:else if updateStatus === "downloading"}
+              <div class="update-heading">
+                <Download size={15} />
+                <span>正在下载 v{updateVersion}…</span>
+              </div>
+              <div class="update-progress-track">
+                <div class="update-progress-bar" style={`width: ${updateProgress}%`}></div>
+              </div>
+              <p class="update-meta">{updateProgressText}</p>
+            {:else if updateStatus === "installing"}
+              <div class="update-heading">
+                <RefreshCw size={15} class="spin" />
+                <span>正在安装更新，应用即将重启…</span>
+              </div>
+            {:else}
+              <div class="update-heading">更新失败</div>
+              {#if updateVersion}
+                <div class="update-actions">
+                  <Button size="sm" variant="outline" onclick={installUpdate}>
+                    <RefreshCw size={14} />
+                    重试更新
+                  </Button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {/if}
       </section>
     {/if}
     {#if store.errorMsg}

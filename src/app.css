@@ -865,6 +865,56 @@ input[type="number"] {
   height: 14px;
   flex-shrink: 0;
 }
+.update-panel {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.update-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-hi);
+}
+.update-meta {
+  margin: 7px 0 0;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.update-notes {
+  margin: 10px 0 0;
+  max-height: 150px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.update-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.update-progress-track {
+  height: 6px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+.update-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 0.15s ease;
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
 /* 编辑器选择按钮里的应用图标 */
 .editor-icon {
   width: 15px;

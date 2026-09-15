@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "version:check": "node scripts/check-app-version.mjs",
     "tauri": "tauri"
   },
   "license": "MIT",
@@ -16,6 +17,8 @@
     "@fontsource/chakra-petch": "^5.3.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "bits-ui": "^2.19.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
