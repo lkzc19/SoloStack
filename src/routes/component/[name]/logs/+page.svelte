@@ -1,6 +1,5 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
   import { page } from "$app/state";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { ExternalLink, Folder } from "lucide-svelte";
@@ -15,20 +14,26 @@
   let logFiles = $state<LogEntry[]>([]);
   let logDir = $state("");
   let searchQuery = $state("");
+  let loadedKey = $state("");
 
   const filteredLogs = $derived(
     logFiles.filter((f) => f.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
   );
 
-  onMount(() => {
+  $effect(() => {
     store.selectedName = name;
-    loadLogs(name);
-    loadLogDir(name);
+    if (!selected || !store.activeEnvironmentId) return;
+    const key = `${store.activeEnvironmentId}:${name}@${selected.version}`;
+    if (loadedKey === key) return;
+    loadedKey = key;
+    void loadLogs(name);
+    void loadLogDir(name);
   });
 
   async function loadLogs(component: string) {
     try {
       const paths = await invoke<string[]>("list_component_logs", {
+        environmentId: store.activeEnvironmentId,
         component,
       });
       logFiles = paths.map((p) => ({ path: p, name: p.split("/").pop() ?? p }));
@@ -39,7 +44,10 @@
 
   async function loadLogDir(component: string) {
     try {
-      const dirs = await invoke<ComponentDirs>("get_component_dirs", { component });
+      const dirs = await invoke<ComponentDirs>("get_component_dirs", {
+        environmentId: store.activeEnvironmentId,
+        component,
+      });
       logDir = dirs.log;
     } catch {
       logDir = "";
@@ -57,7 +65,11 @@
 
   async function openLogFile(path: string) {
     try {
-      await invoke("open_log_file", { component: name, path });
+      await invoke("open_log_file", {
+        environmentId: store.activeEnvironmentId,
+        component: name,
+        path,
+      });
     } catch (e) {
       store.errorMsg = String(e);
     }

@@ -54,7 +54,7 @@
   $effect(() => {
     store.selectedName = name;
     if (!selected) return;
-    const key = `${name}@${selected.version}`;
+    const key = `${store.activeEnvironmentId}:${name}@${selected.version}`;
     if (loadedKey === key) return;
     loadedKey = key;
     void loadFields(name, selected.version);
@@ -62,7 +62,10 @@
 
   async function loadFields(component: string, version: string) {
     try {
-      const loaded = await invoke<FieldValue[]>("list_config_fields", { component });
+      const loaded = await invoke<FieldValue[]>("list_config_fields", {
+        environmentId: store.activeEnvironmentId,
+        component,
+      });
       validateConfigFieldIds(component, version, loaded.map((field) => field.id));
       fields = loaded;
       initialFields = Object.fromEntries(loaded.map((field) => [field.id, field.value]));
@@ -98,7 +101,11 @@
         flashSuccess("配置无变化");
         return;
       }
-      await invoke("save_config_fields", { component: name, updates });
+      await invoke("save_config_fields", {
+        environmentId: store.activeEnvironmentId,
+        component: name,
+        updates,
+      });
       if (wasRunning) {
         await stopComponent(name);
         await startComponent(name);
@@ -117,10 +124,19 @@
 
 <PageHeader title={`${selected?.display_name || store.selectedName} · 配置`}>
   {#snippet actions()}
-    <Button variant="destructive" size="sm" onclick={() => (showUninstall = true)}>
+    <Button
+      variant="destructive"
+      size="sm"
+      onclick={() => (showUninstall = true)}
+      disabled={Boolean(store.switchingEnvironmentId)}
+    >
       卸载组件
     </Button>
-    <Button size="sm" onclick={() => (showSaveConfirm = true)} disabled={fields.length === 0}>
+    <Button
+      size="sm"
+      onclick={() => (showSaveConfirm = true)}
+      disabled={fields.length === 0 || Boolean(store.switchingEnvironmentId)}
+    >
       保存配置
     </Button>
   {/snippet}

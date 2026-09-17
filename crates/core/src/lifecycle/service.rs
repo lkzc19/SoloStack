@@ -11,7 +11,10 @@ pub enum Status {
 }
 
 /// 启动组件：配置就绪后由组件自己的启停序列执行。
-pub fn start(name: &str, version: &str) -> Result<(), String> {
+pub fn start(environment_id: &str, name: &str, version: &str) -> Result<(), String> {
+    if crate::app::environment::active_id()?.as_deref() != Some(environment_id) {
+        return Err("只能启动当前活动环境中的组件".to_string());
+    }
     let operation = crate::app::app_log::Operation::begin(
         "start",
         name,
@@ -19,17 +22,17 @@ pub fn start(name: &str, version: &str) -> Result<(), String> {
         &format!("启动组件 {name} v{version}"),
     );
     let result = (|| {
-        component::prepare_config(name, version)?;
+        component::prepare_config(environment_id, name, version)?;
         let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
-        c.init(version)?;
-        c.start(version)
+        c.init(environment_id, version)?;
+        c.start(environment_id, version)
     })();
     operation.finish(&result);
     result
 }
 
 /// 停止组件。
-pub fn stop(name: &str, version: &str) -> Result<(), String> {
+pub fn stop(environment_id: &str, name: &str, version: &str) -> Result<(), String> {
     let operation = crate::app::app_log::Operation::begin(
         "stop",
         name,
@@ -38,7 +41,7 @@ pub fn stop(name: &str, version: &str) -> Result<(), String> {
     );
     let result = (|| {
         let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
-        c.stop(version)
+        c.stop(environment_id, version)
     })();
     operation.finish(&result);
     result
@@ -46,18 +49,18 @@ pub fn stop(name: &str, version: &str) -> Result<(), String> {
 
 /// 组件整体运行状态：端口由组件从自己的配置文件**精确读**出，
 /// 全部开放 Running / 部分 Partial / 全关 Stopped。
-pub fn component_status(name: &str, version: &str) -> Status {
+pub fn component_status(environment_id: &str, name: &str, version: &str) -> Status {
     let Some(component) = registry::by_component(name) else {
         return Status::Stopped;
     };
-    let specs = component.service_specs(version);
+    let specs = component.service_specs(environment_id, version);
     if !specs.is_empty() {
         return match process::inspect_services(&specs) {
             Ok(observations) => services_status(&observations),
             Err(error) => Status::Error(error),
         };
     }
-    ports_status(&component.detect_ports(version))
+    ports_status(&component.detect_ports(environment_id, version))
 }
 
 /// 端口集合 → 状态。
@@ -105,6 +108,8 @@ mod tests {
     use super::*;
     use crate::app::{app_log, paths};
 
+    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     fn observation(key: &'static str, state: ServiceState) -> ServiceObservation {
         ServiceObservation {
             key,
@@ -113,13 +118,20 @@ mod tests {
         }
     }
 
-    fn setup_fake_hadoop(tmp: &std::path::Path) {
+    fn activate_environment(tmp: &std::path::Path) -> String {
         std::env::set_var("HOME", tmp);
-        let instance = paths::instance_dir("hadoop", "3.5.0").unwrap();
-        let config = component::config_dir("hadoop", "3.5.0").unwrap();
+        let environment = crate::app::environment::create("默认环境").unwrap();
+        crate::app::environment::set_active_id(Some(&environment.id)).unwrap();
+        environment.id
+    }
+
+    fn setup_fake_hadoop(tmp: &std::path::Path, environment_id: &str) {
+        std::env::set_var("HOME", tmp);
+        let instance = paths::instance_dir(environment_id, "hadoop", "3.5.0").unwrap();
+        let config = component::config_dir(environment_id, "hadoop", "3.5.0").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
-        let name_dir = paths::var_data_instance_dir("hadoop", "3.5.0")
+        let name_dir = paths::var_data_instance_dir(environment_id, "hadoop", "3.5.0")
             .unwrap()
             .join("name");
 
@@ -155,7 +167,7 @@ mod tests {
     #[test]
     fn component_status_unknown_empty_stopped() {
         // 未知组件无端口 → Stopped（不依赖真实端口占用）
-        let s = component_status("no-such-component", "0.0.0");
+        let s = component_status(ENV_ID, "no-such-component", "0.0.0");
         assert_eq!(s, Status::Stopped);
     }
 
@@ -191,10 +203,11 @@ mod tests {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join("solostack-service-log-once");
         let _ = std::fs::remove_dir_all(&tmp);
-        setup_fake_hadoop(&tmp);
+        let environment_id = activate_environment(&tmp);
+        setup_fake_hadoop(&tmp, &environment_id);
 
-        start("hadoop", "3.5.0").unwrap();
-        stop("hadoop", "3.5.0").unwrap();
+        start(&environment_id, "hadoop", "3.5.0").unwrap();
+        stop(&environment_id, "hadoop", "3.5.0").unwrap();
 
         let logs = app_log::read_logs_for(&app_log::today()).unwrap();
         assert_eq!(logs.matches("启动组件 hadoop v3.5.0").count(), 1);
@@ -209,10 +222,11 @@ mod tests {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join("solostack-service-init-failure");
         let _ = std::fs::remove_dir_all(&tmp);
-        setup_fake_hadoop(&tmp);
+        let environment_id = activate_environment(&tmp);
+        setup_fake_hadoop(&tmp, &environment_id);
 
-        let instance = paths::instance_dir("hadoop", "3.5.0").unwrap();
-        let name_dir = paths::var_data_instance_dir("hadoop", "3.5.0")
+        let instance = paths::instance_dir(&environment_id, "hadoop", "3.5.0").unwrap();
+        let name_dir = paths::var_data_instance_dir(&environment_id, "hadoop", "3.5.0")
             .unwrap()
             .join("name");
         let _ = std::fs::remove_file(name_dir.join("current/VERSION"));
@@ -236,12 +250,31 @@ mod tests {
         )
         .unwrap();
 
-        let err = start("hadoop", "3.5.0").unwrap_err();
+        let err = start(&environment_id, "hadoop", "3.5.0").unwrap_err();
         assert!(err.contains("NameNode 格式化失败"), "{err}");
         assert!(std::fs::read_to_string(&init_log)
             .unwrap()
             .contains("namenode -format -force"));
         assert!(!start_log.exists(), "init 失败后不应执行任何组件启动命令");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cannot_start_component_in_inactive_environment() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-service-inactive-environment");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let active = crate::app::environment::create("活动环境").unwrap();
+        crate::app::environment::set_active_id(Some(&active.id)).unwrap();
+        let inactive = crate::app::environment::create("非活动环境").unwrap();
+        setup_fake_hadoop(&tmp, &inactive.id);
+
+        let error = start(&inactive.id, "hadoop", "3.5.0").unwrap_err();
+        assert!(error.contains("当前活动环境"), "{error}");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

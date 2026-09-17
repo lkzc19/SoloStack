@@ -13,24 +13,41 @@ const DAEMON_TIMEOUT: Duration = Duration::from_secs(60);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Runtime for Hadoop {
-    fn init(&self, version: &str) -> Result<(), String> {
-        format_namenode_if_needed(version)?;
+    fn init(&self, environment_id: &str, version: &str) -> Result<(), String> {
+        format_namenode_if_needed(environment_id, version)?;
         Ok(())
     }
 
-    fn start(&self, version: &str) -> Result<(), String> {
+    fn start(&self, environment_id: &str, version: &str) -> Result<(), String> {
         // 直接用 --daemon 启动各进程，绕过 start-dfs/start-yarn 内部的 SSH 依赖。
         // 顺序：namenode → datanode → resourcemanager → nodemanager → historyserver
-        run_daemon(version, "bin/hdfs", &["--daemon", "start", "namenode"])?;
-        run_daemon(version, "bin/hdfs", &["--daemon", "start", "datanode"])?;
         run_daemon(
+            environment_id,
+            version,
+            "bin/hdfs",
+            &["--daemon", "start", "namenode"],
+        )?;
+        run_daemon(
+            environment_id,
+            version,
+            "bin/hdfs",
+            &["--daemon", "start", "datanode"],
+        )?;
+        run_daemon(
+            environment_id,
             version,
             "bin/yarn",
             &["--daemon", "start", "resourcemanager"],
         )?;
-        run_daemon(version, "bin/yarn", &["--daemon", "start", "nodemanager"])?;
-        if config::history_enabled(version) {
+        run_daemon(
+            environment_id,
+            version,
+            "bin/yarn",
+            &["--daemon", "start", "nodemanager"],
+        )?;
+        if config::history_enabled(environment_id, version) {
             run_daemon(
+                environment_id,
                 version,
                 "bin/mapred",
                 &["--daemon", "start", "historyserver"],
@@ -39,33 +56,55 @@ impl Runtime for Hadoop {
         Ok(())
     }
 
-    fn stop(&self, version: &str) -> Result<(), String> {
+    fn stop(&self, environment_id: &str, version: &str) -> Result<(), String> {
         // 逆序停止：historyserver → nodemanager → resourcemanager → datanode → namenode
-        if config::history_enabled(version) {
+        if config::history_enabled(environment_id, version) {
             run_daemon(
+                environment_id,
                 version,
                 "bin/mapred",
                 &["--daemon", "stop", "historyserver"],
             )?;
         }
-        run_daemon(version, "bin/yarn", &["--daemon", "stop", "nodemanager"])?;
         run_daemon(
+            environment_id,
+            version,
+            "bin/yarn",
+            &["--daemon", "stop", "nodemanager"],
+        )?;
+        run_daemon(
+            environment_id,
             version,
             "bin/yarn",
             &["--daemon", "stop", "resourcemanager"],
         )?;
-        run_daemon(version, "bin/hdfs", &["--daemon", "stop", "datanode"])?;
-        run_daemon(version, "bin/hdfs", &["--daemon", "stop", "namenode"])?;
+        run_daemon(
+            environment_id,
+            version,
+            "bin/hdfs",
+            &["--daemon", "stop", "datanode"],
+        )?;
+        run_daemon(
+            environment_id,
+            version,
+            "bin/hdfs",
+            &["--daemon", "stop", "namenode"],
+        )?;
         Ok(())
     }
 
-    fn service_specs(&self, version: &str) -> Vec<ServiceSpec> {
-        let eff = Effective::from_config(version);
-        let root = paths::instance_dir(NAME, version)
+    fn service_specs(&self, environment_id: &str, version: &str) -> Vec<ServiceSpec> {
+        let eff = Effective::from_config(environment_id, version);
+        let root = paths::instance_dir(environment_id, NAME, version)
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| NAME.to_string());
         let service = |key, class: &str, ports: Vec<u16>| {
-            ServiceSpec::new(key, vec![root.clone(), class.to_string()], ports)
+            ServiceSpec::new(
+                environment_id,
+                key,
+                vec![root.clone(), class.to_string()],
+                ports,
+            )
         };
 
         let mut specs = vec![
@@ -100,8 +139,8 @@ impl Runtime for Hadoop {
         specs
     }
 
-    fn web_uis(&self, version: &str) -> Vec<WebUi> {
-        let eff = Effective::from_config(version);
+    fn web_uis(&self, environment_id: &str, version: &str) -> Vec<WebUi> {
+        let eff = Effective::from_config(environment_id, version);
         let mut list = vec![
             WebUi {
                 name: "HDFS".into(),
@@ -129,13 +168,13 @@ impl Runtime for Hadoop {
 /// - **目录从配置精确读**（`config::namenode_dir`）：若按默认路径判断，手改过
 ///   `dfs.namenode.name.dir` 后会判断错位，于是**每次启动都跑一次 `-format -force`**，
 ///   而 `-force` 会重格式化、抹掉命名空间数据。
-fn format_namenode_if_needed(version: &str) -> Result<(), String> {
-    let name_dir = config::namenode_dir(version)?;
+fn format_namenode_if_needed(environment_id: &str, version: &str) -> Result<(), String> {
+    let name_dir = config::namenode_dir(environment_id, version)?;
     if name_dir.join("current/VERSION").exists() {
         return Ok(());
     }
 
-    let instance = paths::instance_dir(NAME, version).map_err(|e| e.to_string())?;
+    let instance = paths::instance_dir(environment_id, NAME, version).map_err(|e| e.to_string())?;
     if !instance.join("bin/hdfs").exists() {
         return Err(format!(
             "未找到 hdfs 命令: {}",
@@ -149,6 +188,7 @@ fn format_namenode_if_needed(version: &str) -> Result<(), String> {
     );
 
     run_command(
+        environment_id,
         version,
         "bin/hdfs",
         &["namenode", "-format", "-force"],
@@ -160,13 +200,17 @@ fn format_namenode_if_needed(version: &str) -> Result<(), String> {
 
 /// 执行组件脚本并检查退出码。
 fn run_command(
+    environment_id: &str,
     version: &str,
     script: &str,
     args: &[&str],
     timeout: Duration,
 ) -> Result<(), String> {
-    let conf = component::config_dir(NAME, version)?.display().to_string();
+    let conf = component::config_dir(environment_id, NAME, version)?
+        .display()
+        .to_string();
     exec::run_checked(
+        environment_id,
         &Hadoop,
         version,
         script,
@@ -181,19 +225,26 @@ fn run_command(
 ///
 /// `hdfs/yarn/mapred --daemon start/stop` 会 fork 到后台后立即退出，
 /// 不依赖 SSH，适合纯本机伪分布式场景。
-fn run_daemon(version: &str, script: &str, args: &[&str]) -> Result<(), String> {
-    run_command(version, script, args, DAEMON_TIMEOUT)
+fn run_daemon(
+    environment_id: &str,
+    version: &str,
+    script: &str,
+    args: &[&str],
+) -> Result<(), String> {
+    run_command(environment_id, version, script, args, DAEMON_TIMEOUT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     /// 铺一份最小实例：官方配置文件存在（hdfs-site.xml 可选写自定义 name dir）。
     /// 调用方需持有 HOME_LOCK。
     fn setup(tmp: &std::path::Path, name_dir: Option<&std::path::Path>) {
         std::env::set_var("HOME", tmp);
-        let dir = component::config_dir(NAME, "3.5.0").unwrap();
+        let dir = component::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         let mut hdfs = String::from("<?xml version=\"1.0\"?>\n<configuration>\n");
         if let Some(p) = name_dir {
@@ -218,15 +269,15 @@ mod tests {
         setup(&tmp, None);
 
         // 官方产物 current/VERSION 存在 → 已格式化，不执行任何脚本
-        let name_dir = config::namenode_dir("3.5.0").unwrap();
+        let name_dir = config::namenode_dir(ENV_ID, "3.5.0").unwrap();
         std::fs::create_dir_all(name_dir.join("current")).unwrap();
         std::fs::write(name_dir.join("current/VERSION"), "namespaceID=1\n").unwrap();
-        assert!(format_namenode_if_needed("3.5.0").is_ok());
+        assert!(format_namenode_if_needed(ENV_ID, "3.5.0").is_ok());
 
         // 反之：没有该文件时会真的往格式化流程走（此处因无 hdfs 二进制而报错，
         // 报错内容即证明没有静默跳过）
         std::fs::remove_file(name_dir.join("current/VERSION")).unwrap();
-        let err = format_namenode_if_needed("3.5.0").unwrap_err();
+        let err = format_namenode_if_needed(ENV_ID, "3.5.0").unwrap_err();
         assert!(err.contains("未找到 hdfs 命令"), "实际报错: {err}");
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -244,9 +295,9 @@ mod tests {
         std::fs::create_dir_all(custom.join("current")).unwrap();
         std::fs::write(custom.join("current/VERSION"), "namespaceID=1\n").unwrap();
 
-        assert_eq!(config::namenode_dir("3.5.0").unwrap(), custom);
+        assert_eq!(config::namenode_dir(ENV_ID, "3.5.0").unwrap(), custom);
         // 判断跟到自定义目录 → 不会误判为「未格式化」而重格式化
-        assert!(format_namenode_if_needed("3.5.0").is_ok());
+        assert!(format_namenode_if_needed(ENV_ID, "3.5.0").is_ok());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -258,8 +309,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         setup(&tmp, None);
 
-        let instance = paths::instance_dir(NAME, "3.5.0").unwrap();
-        let config = component::config_dir(NAME, "3.5.0").unwrap();
+        let instance = paths::instance_dir(ENV_ID, NAME, "3.5.0").unwrap();
+        let config = component::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
         std::fs::create_dir_all(&bin).unwrap();
@@ -271,7 +322,13 @@ mod tests {
         .unwrap();
         let script = bin.join("fake-daemon.sh");
         std::fs::write(&script, "printf 'daemon ok\\n'\nexit 0\n").unwrap();
-        assert!(run_daemon("3.5.0", "bin/fake-daemon.sh", &["start", "namenode"]).is_ok());
+        assert!(run_daemon(
+            ENV_ID,
+            "3.5.0",
+            "bin/fake-daemon.sh",
+            &["start", "namenode"]
+        )
+        .is_ok());
 
         std::fs::write(
             &script,
@@ -279,7 +336,13 @@ mod tests {
         )
         .unwrap();
 
-        let err = run_daemon("3.5.0", "bin/fake-daemon.sh", &["start", "namenode"]).unwrap_err();
+        let err = run_daemon(
+            ENV_ID,
+            "3.5.0",
+            "bin/fake-daemon.sh",
+            &["start", "namenode"],
+        )
+        .unwrap_err();
         assert!(err.contains("执行失败"), "{err}");
         assert!(err.contains("daemon stdout"), "{err}");
         assert!(err.contains("daemon failed"), "{err}");
@@ -294,7 +357,7 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let specs = Hadoop.service_specs("3.5.0");
+        let specs = Hadoop.service_specs(ENV_ID, "3.5.0");
         let keys: Vec<&str> = specs.iter().map(|spec| spec.key).collect();
         assert_eq!(
             keys,

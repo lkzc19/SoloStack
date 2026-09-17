@@ -5,8 +5,13 @@ use std::path::PathBuf;
 use crate::app::paths;
 
 /// 列出组件日志文件（`var/log/<组件>/<组件>-<版本>/`，按修改时间倒序）。
-pub fn list_log_files(name: &str, version: &str) -> Result<Vec<PathBuf>, String> {
-    let dir = paths::var_log_instance_dir(name, version).map_err(|e| e.to_string())?;
+pub fn list_log_files(
+    environment_id: &str,
+    name: &str,
+    version: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let dir =
+        paths::var_log_instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -74,7 +79,7 @@ pub fn ensure_within_root(path: &std::path::Path) -> Result<(), String> {
 }
 
 /// 校验日志路径属于该组件实例（`var/log/<组件>/<组件>-<版本>/`），防跨组件越权读取。
-pub fn is_log_of(name: &str, version: &str, path: &std::path::Path) -> bool {
+pub fn is_log_of(environment_id: &str, name: &str, version: &str, path: &std::path::Path) -> bool {
     // 同 is_within_root：`..` 组件能让词法前缀检查失效，必须显式拒绝
     if path
         .components()
@@ -82,7 +87,7 @@ pub fn is_log_of(name: &str, version: &str, path: &std::path::Path) -> bool {
     {
         return false;
     }
-    paths::var_log_instance_dir(name, version)
+    paths::var_log_instance_dir(environment_id, name, version)
         .map(|root| path.starts_with(&root))
         .unwrap_or(false)
 }
@@ -92,11 +97,12 @@ pub fn is_log_of(name: &str, version: &str, path: &std::path::Path) -> bool {
 /// 同时检查组件归属、日志扩展名、真实文件和符号链接目标，防止通过日志页
 /// 读取组件目录之外的文件。
 pub fn validated_log_file(
+    environment_id: &str,
     name: &str,
     version: &str,
     path: &std::path::Path,
 ) -> Result<PathBuf, String> {
-    if !is_log_of(name, version, path) {
+    if !is_log_of(environment_id, name, version, path) {
         return Err(format!("日志路径不属于组件 {name}"));
     }
     let valid_extension = path
@@ -110,7 +116,7 @@ pub fn validated_log_file(
         return Err(format!("日志文件不存在: {}", path.display()));
     }
 
-    let root = paths::var_log_instance_dir(name, version)
+    let root = paths::var_log_instance_dir(environment_id, name, version)
         .map_err(|e| e.to_string())?
         .canonicalize()
         .map_err(|e| format!("解析日志目录失败: {e}"))?;
@@ -127,6 +133,8 @@ pub fn validated_log_file(
 mod tests {
     use super::*;
 
+    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     /// 回归：词法前缀比较挡不住 `..`，必须在校验层显式拒绝。
     #[test]
     fn path_guards_reject_parent_dir_components() {
@@ -135,15 +143,20 @@ mod tests {
         let tmp = std::env::temp_dir().join("solostack-logs-traversal");
         std::env::set_var("HOME", &tmp);
 
-        let log_root = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
+        let log_root = paths::var_log_instance_dir(ENV_ID, "hadoop", "3.5.0").unwrap();
         let evil = log_root.join("../../../../../../etc/passwd");
         assert!(
-            !is_log_of("hadoop", "3.5.0", &evil),
+            !is_log_of(ENV_ID, "hadoop", "3.5.0", &evil),
             "含 `..` 的路径必须被拒（否则能读到任意文件）"
         );
         assert!(ensure_within_root(&evil).is_err());
         // 正常路径不受影响
-        assert!(is_log_of("hadoop", "3.5.0", &log_root.join("hadoop.log")));
+        assert!(is_log_of(
+            ENV_ID,
+            "hadoop",
+            "3.5.0",
+            &log_root.join("hadoop.log")
+        ));
         assert!(ensure_within_root(&log_root.join("hadoop.log")).is_ok());
     }
 
@@ -170,14 +183,14 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let log_dir = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
+        let log_dir = paths::var_log_instance_dir(ENV_ID, "hadoop", "3.5.0").unwrap();
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("hadoop-nn.log"), "x\n").unwrap();
 
-        let files = list_log_files("hadoop", "3.5.0").unwrap();
+        let files = list_log_files(ENV_ID, "hadoop", "3.5.0").unwrap();
         assert_eq!(files.len(), 1);
-        assert!(is_log_of("hadoop", "3.5.0", &files[0]));
-        assert!(!is_log_of("kafka", "4.1.0", &files[0]));
+        assert!(is_log_of(ENV_ID, "hadoop", "3.5.0", &files[0]));
+        assert!(!is_log_of(ENV_ID, "kafka", "4.1.0", &files[0]));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -190,17 +203,17 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let hadoop = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
-        let kafka = paths::var_log_instance_dir("kafka", "4.3.1").unwrap();
+        let hadoop = paths::var_log_instance_dir(ENV_ID, "hadoop", "3.5.0").unwrap();
+        let kafka = paths::var_log_instance_dir(ENV_ID, "kafka", "4.3.1").unwrap();
         std::fs::create_dir_all(&hadoop).unwrap();
         std::fs::create_dir_all(&kafka).unwrap();
         std::fs::write(hadoop.join("hadoop.log"), "ok\n").unwrap();
         std::fs::write(kafka.join("kafka.log"), "ok\n").unwrap();
         std::fs::write(hadoop.join("secret.txt"), "no\n").unwrap();
 
-        assert!(validated_log_file("hadoop", "3.5.0", &hadoop.join("hadoop.log")).is_ok());
-        assert!(validated_log_file("hadoop", "3.5.0", &kafka.join("kafka.log")).is_err());
-        assert!(validated_log_file("hadoop", "3.5.0", &hadoop.join("secret.txt")).is_err());
+        assert!(validated_log_file(ENV_ID, "hadoop", "3.5.0", &hadoop.join("hadoop.log")).is_ok());
+        assert!(validated_log_file(ENV_ID, "hadoop", "3.5.0", &kafka.join("kafka.log")).is_err());
+        assert!(validated_log_file(ENV_ID, "hadoop", "3.5.0", &hadoop.join("secret.txt")).is_err());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -214,13 +227,13 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let root = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
+        let root = paths::var_log_instance_dir(ENV_ID, "hadoop", "3.5.0").unwrap();
         std::fs::create_dir_all(&root).unwrap();
         let outside = tmp.join("outside.log");
         std::fs::write(&outside, "secret\n").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("escape.log")).unwrap();
 
-        assert!(validated_log_file("hadoop", "3.5.0", &root.join("escape.log")).is_err());
+        assert!(validated_log_file(ENV_ID, "hadoop", "3.5.0", &root.join("escape.log")).is_err());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

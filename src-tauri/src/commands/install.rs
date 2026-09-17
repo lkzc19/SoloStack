@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use solostack_core::component::install_config::{InstallConfig, InstallParam, InstallParams};
 use solostack_core::component::registry;
-use solostack_core::lifecycle::{install, uninstall};
+use solostack_core::lifecycle::{install, lock, uninstall};
 use solostack_core::package::{download, manifest};
 use tauri::Emitter;
 
@@ -13,11 +13,28 @@ use super::resolve;
 
 /// 当前进行中的安装取消标志（同一时刻至多一个安装）。
 static CANCEL_INSTALL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct InstallRunningGuard;
+
+impl Drop for InstallRunningGuard {
+    fn drop(&mut self) {
+        INSTALL_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+fn begin_install_running() -> Result<InstallRunningGuard, String> {
+    INSTALL_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .map(|_| InstallRunningGuard)
+        .map_err(|_| "已有安装任务正在执行".to_string())
+}
 
 /// 安装组件：解析源 URL → 下载 → 解压 → 生成配置。后台线程执行。
 #[tauri::command]
 pub async fn install_component(
     app: tauri::AppHandle,
+    environment_id: String,
     component: String,
     version: String,
     source_id: String,
@@ -26,12 +43,16 @@ pub async fn install_component(
 ) -> Result<(), String> {
     // 组件自定义安装参数：命令层只做透传，具体含义与校验归组件（Component::apply_install_config）
     let config = InstallConfig {
+        environment_id: environment_id.clone(),
         component: component.clone(),
         version: version.clone(),
         source_id,
         jdk_version,
         params: params.unwrap_or_default(),
     };
+
+    let install_guard = begin_install_running()?;
+    let guard = lock::begin_environment_operation(&environment_id)?;
 
     // 取消标志：注册到全局，供 `cancel_install` 命令触发
     let cancel = Arc::new(AtomicBool::new(false));
@@ -76,9 +97,12 @@ pub async fn install_component(
     }));
 
     let cancel2 = cancel.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || install::install(&config, progress, &cancel2))
-            .await;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _install_guard = install_guard;
+        let _guard = guard;
+        install::install(&config, progress, &cancel2)
+    })
+    .await;
 
     *CANCEL_INSTALL.lock().unwrap() = None;
 
@@ -100,10 +124,16 @@ pub fn cancel_install() -> Result<(), String> {
 
 /// 纯净卸载组件实例（幂等）。`keep_data=true` 时保留持久数据目录。
 #[tauri::command]
-pub async fn uninstall_component(component: String, keep_data: bool) -> Result<(), String> {
-    let i = resolve(&component)?;
+pub async fn uninstall_component(
+    environment_id: String,
+    component: String,
+    keep_data: bool,
+) -> Result<(), String> {
+    let i = resolve(&environment_id, &component)?;
+    let guard = lock::begin_environment_operation(&environment_id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        uninstall::uninstall(&i.name, &i.version, keep_data)
+        let _guard = guard;
+        uninstall::uninstall(&i.environment_id, &i.name, &i.version, keep_data)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -135,7 +165,7 @@ pub async fn is_package_downloaded(
     .map_err(|e| e.to_string())?
 }
 
-/// 列出 `var/downloads/` 下所有已下载的包（名称 + 大小），供设置-缓存 tab 展示。
+/// 列出 `cache/downloads/` 下所有已下载的包（名称 + 大小），供设置-缓存 tab 展示。
 #[tauri::command]
 pub fn list_download_packages() -> Result<Vec<DownloadPackageInfo>, String> {
     Ok(download::list_downloaded_packages()?
@@ -147,9 +177,12 @@ pub fn list_download_packages() -> Result<Vec<DownloadPackageInfo>, String> {
         .collect())
 }
 
-/// 删除 `var/downloads/` 下指定的缓存包。
+/// 删除 `cache/downloads/` 下指定的缓存包。
 #[tauri::command]
 pub fn delete_download_packages(names: Vec<String>) -> Result<(), String> {
+    if INSTALL_RUNNING.load(Ordering::SeqCst) {
+        return Err("安装进行中，暂时不能删除包缓存".to_string());
+    }
     download::delete_downloaded_packages(&names)
 }
 

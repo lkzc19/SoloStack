@@ -25,6 +25,20 @@ export interface ComponentInfo {
   installed: boolean;
 }
 
+export interface EnvironmentComponentInfo {
+  component: string;
+  version: string;
+}
+
+export interface EnvironmentInfo {
+  id: string;
+  name: string;
+  active: boolean;
+  components: EnvironmentComponentInfo[];
+  created_at: string;
+  last_activated_at: string | null;
+}
+
 export interface UiComponent extends ComponentInfo {
   status: Status;
   statusText: string;

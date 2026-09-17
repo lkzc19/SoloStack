@@ -78,8 +78,8 @@ impl Effective {
     /// 启动前 / 配置页：从配置文件精确读回，单项缺失用默认值兜底。
     ///
     /// server.properties **只读一次**：该路径在状态轮询里高频执行，逐键读盘代价高。
-    fn from_config(version: &str) -> Self {
-        let props = read_all(version);
+    fn from_config(environment_id: &str, version: &str) -> Self {
+        let props = read_all(environment_id, version);
         let num = |key: &str, default: u64| {
             props
                 .get(key)
@@ -113,8 +113,8 @@ impl ConfigLifecycle for Kafka {
         }
     }
 
-    fn detect_ports(&self, version: &str) -> Vec<u16> {
-        vec![read_broker(version).unwrap_or(BROKER_DEFAULT)]
+    fn detect_ports(&self, environment_id: &str, version: &str) -> Vec<u16> {
+        vec![read_broker(environment_id, version).unwrap_or(BROKER_DEFAULT)]
     }
 
     fn install_params(&self, _version: &str) -> Vec<InstallParam> {
@@ -127,13 +127,22 @@ impl ConfigLifecycle for Kafka {
         ]
     }
 
-    fn apply_install_config(&self, version: &str, params: &InstallParams) -> Result<(), String> {
-        write_config(version, &Effective::from_install(params)?)
+    fn apply_install_config(
+        &self,
+        environment_id: &str,
+        version: &str,
+        params: &InstallParams,
+    ) -> Result<(), String> {
+        write_config(environment_id, version, &Effective::from_install(params)?)
     }
 
-    fn ensure_config(&self, version: &str) -> Result<(), String> {
-        component::validate_layout(NAME, version, &self.config_layout())?;
-        write_config(version, &Effective::from_config(version))
+    fn ensure_config(&self, environment_id: &str, version: &str) -> Result<(), String> {
+        component::validate_layout(environment_id, NAME, version, &self.config_layout())?;
+        write_config(
+            environment_id,
+            version,
+            &Effective::from_config(environment_id, version),
+        )
     }
 
     fn java_env_file(&self) -> Option<&'static str> {
@@ -142,8 +151,8 @@ impl ConfigLifecycle for Kafka {
 }
 
 impl FieldSchema for Kafka {
-    fn field_values(&self, version: &str) -> Vec<ConfigFieldValue> {
-        let eff = Effective::from_config(version);
+    fn field_values(&self, environment_id: &str, version: &str) -> Vec<ConfigFieldValue> {
+        let eff = Effective::from_config(environment_id, version);
         vec![
             ConfigFieldValue {
                 id: "broker_port".into(),
@@ -174,10 +183,11 @@ impl FieldSchema for Kafka {
 
     fn plan_field_updates(
         &self,
+        environment_id: &str,
         version: &str,
         updates: &[ConfigFieldUpdate],
     ) -> Result<ConfigPlan, String> {
-        let mut next = Effective::from_config(version);
+        let mut next = Effective::from_config(environment_id, version);
         let mut broker_port = None;
         let mut num_partitions = None;
         let mut retention_hours = None;
@@ -226,12 +236,21 @@ impl FieldSchema for Kafka {
         }
         ensure_broker_port_ok(next.broker)?;
 
-        let path = component::config_path(NAME, version, F_PROPS)?;
+        let path = component::config_path(environment_id, NAME, version, F_PROPS)?;
         let mut plan = ConfigPlan::new();
         if let Some(port) = broker_port {
-            let current_listeners = read_prop(version, K_LISTENERS, &listeners(BROKER_DEFAULT));
-            let current_advertised =
-                read_prop(version, K_ADVERTISED, &advertised_listeners(BROKER_DEFAULT));
+            let current_listeners = read_prop(
+                environment_id,
+                version,
+                K_LISTENERS,
+                &listeners(BROKER_DEFAULT),
+            );
+            let current_advertised = read_prop(
+                environment_id,
+                version,
+                K_ADVERTISED,
+                &advertised_listeners(BROKER_DEFAULT),
+            );
             plan.set(
                 path.clone(),
                 K_LISTENERS,
@@ -277,11 +296,12 @@ fn ensure_broker_port_ok(broker: u16) -> Result<(), String> {
 }
 
 /// 把生效配置合并写进官方 server.properties（含 KRaft 必需项）。
-fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
+fn write_config(environment_id: &str, version: &str, eff: &Effective) -> Result<(), String> {
     ensure_broker_port_ok(eff.broker)?;
-    let data_root = paths::var_data_instance_dir(NAME, version).map_err(|e| e.to_string())?;
+    let data_root =
+        paths::var_data_instance_dir(environment_id, NAME, version).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_root).map_err(|e| e.to_string())?;
-    let path = component::config_path(NAME, version, F_PROPS)?;
+    let path = component::config_path(environment_id, NAME, version, F_PROPS)?;
     let mut plan = ConfigPlan::new();
 
     let entries = [
@@ -292,7 +312,12 @@ fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
         (K_ADVERTISED, advertised_listeners(eff.broker)),
         (K_INTER_BROKER, "PLAINTEXT".to_string()),
         (K_CONTROLLER_NAMES, "CONTROLLER".to_string()),
-        (K_LOG_DIRS, managed_log_dir(version)?.display().to_string()),
+        (
+            K_LOG_DIRS,
+            managed_log_dir(environment_id, version)?
+                .display()
+                .to_string(),
+        ),
         (K_NUM_PARTITIONS, eff.num_partitions.to_string()),
         (K_OFFSETS_RF, "1".to_string()),
         (K_TXN_RF, "1".to_string()),
@@ -310,8 +335,8 @@ fn write_config(version: &str, eff: &Effective) -> Result<(), String> {
     crate::config::apply_plan(&plan)
 }
 
-fn read_prop(version: &str, key: &str, default: &str) -> String {
-    component::open_config(NAME, version, F_PROPS)
+fn read_prop(environment_id: &str, version: &str, key: &str, default: &str) -> String {
+    component::open_config(environment_id, NAME, version, F_PROPS)
         .and_then(|f| f.get(key))
         .ok()
         .flatten()
@@ -324,26 +349,33 @@ fn read_prop(version: &str, key: &str, default: &str) -> String {
 /// 绝不把官方模板的占位值（`/tmp/kraft-combined-logs`）回声回配置里 ——
 /// 否则数据（以及格式化标记 `meta.properties`）会留在 /tmp，被系统清理后
 /// 下次启动会重新格式化并丢掉 topic。
-pub(super) fn managed_log_dir(version: &str) -> Result<std::path::PathBuf, String> {
-    Ok(paths::var_data_instance_dir(NAME, version)
+pub(super) fn managed_log_dir(
+    environment_id: &str,
+    version: &str,
+) -> Result<std::path::PathBuf, String> {
+    Ok(paths::var_data_instance_dir(environment_id, NAME, version)
         .map_err(|e| e.to_string())?
         .join("kafka"))
 }
 
 /// KRaft 日志目录**实际所在位置**：从配置精确读 `log.dirs`（未设置则受管路径）。
 /// 供「是否已格式化」判断使用，必须与 Kafka 实际落盘位置一致。
-pub(super) fn configured_log_dir(version: &str) -> Result<std::path::PathBuf, String> {
-    let fallback = managed_log_dir(version)?;
-    let Some(raw) = read_raw_opt(version, K_LOG_DIRS) else {
+pub(super) fn configured_log_dir(
+    environment_id: &str,
+    version: &str,
+) -> Result<std::path::PathBuf, String> {
+    let fallback = managed_log_dir(environment_id, version)?;
+    let Some(raw) = read_raw_opt(environment_id, version, K_LOG_DIRS) else {
         return Ok(fallback);
     };
-    let base = paths::instance_dir(NAME, version).unwrap_or_else(|_| fallback.clone());
+    let base =
+        paths::instance_dir(environment_id, NAME, version).unwrap_or_else(|_| fallback.clone());
     Ok(crate::config::resolve_path(&raw, &base).unwrap_or(fallback))
 }
 
 /// 一次读入 server.properties 的全部键值（键 → 值）。
-fn read_all(version: &str) -> std::collections::HashMap<String, String> {
-    component::open_config(NAME, version, F_PROPS)
+fn read_all(environment_id: &str, version: &str) -> std::collections::HashMap<String, String> {
+    component::open_config(environment_id, NAME, version, F_PROPS)
         .and_then(|f| f.read_entries())
         .map(|entries| {
             entries
@@ -355,14 +387,14 @@ fn read_all(version: &str) -> std::collections::HashMap<String, String> {
 }
 
 /// 精确读配置项原始值（空值视为未设置）。
-fn read_raw_opt(version: &str, key: &str) -> Option<String> {
-    let f = component::open_config(NAME, version, F_PROPS).ok()?;
+fn read_raw_opt(environment_id: &str, version: &str, key: &str) -> Option<String> {
+    let f = component::open_config(environment_id, NAME, version, F_PROPS).ok()?;
     f.get_trimmed(key).ok()?
 }
 
 /// broker 端口：从 `listeners` 里精确读。
-pub(super) fn read_broker(version: &str) -> Option<u16> {
-    let listeners = read_prop(version, K_LISTENERS, "");
+pub(super) fn read_broker(environment_id: &str, version: &str) -> Option<u16> {
+    let listeners = read_prop(environment_id, version, K_LISTENERS, "");
     let port = broker_port(&listeners)?;
     port.parse().ok()
 }
@@ -436,18 +468,20 @@ fn mb_from_bytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
 
+    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     fn save_field(id: &str, value: &str) -> Result<(), String> {
         let updates = [ConfigFieldUpdate {
             id: id.to_string(),
             value: value.to_string(),
         }];
-        let plan = Kafka.plan_field_updates("4.3.1", &updates)?;
+        let plan = Kafka.plan_field_updates(ENV_ID, "4.3.1", &updates)?;
         crate::config::apply_plan(&plan)
     }
 
     fn setup_instance(tmp: &std::path::Path) {
         std::env::set_var("HOME", tmp);
-        let dir = component::config_dir(NAME, "4.3.1").unwrap();
+        let dir = component::config_dir(ENV_ID, NAME, "4.3.1").unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         // 模拟官方模板（4.x 同形）：带注释 + 官方默认值（quorum 用 bootstrap.servers）
         std::fs::write(
@@ -492,9 +526,9 @@ mod tests {
         assert_eq!(declared[P_AUTO_CREATE], "true");
 
         Kafka
-            .apply_install_config("4.3.1", &InstallParams::new())
+            .apply_install_config(ENV_ID, "4.3.1", &InstallParams::new())
             .unwrap();
-        let eff = Effective::from_config("4.3.1");
+        let eff = Effective::from_config(ENV_ID, "4.3.1");
         assert!(eff.broker >= BROKER_DEFAULT, "端口可能因占用避让而前移");
         assert_eq!(eff.num_partitions, 1);
         assert_eq!(eff.retention_hours, 168);
@@ -512,13 +546,13 @@ mod tests {
         setup_instance(&tmp);
 
         let eff = Effective::from_install(&install_params()).unwrap();
-        write_config("4.3.1", &eff).unwrap();
-        assert_eq!(Kafka.detect_ports("4.3.1"), vec![eff.broker]);
-        assert_eq!(Effective::from_config("4.3.1"), eff);
+        write_config(ENV_ID, "4.3.1", &eff).unwrap();
+        assert_eq!(Kafka.detect_ports(ENV_ID, "4.3.1"), vec![eff.broker]);
+        assert_eq!(Effective::from_config(ENV_ID, "4.3.1"), eff);
 
         // 改端口：写入 listeners 并能精确读回
         save_field("broker_port", "9095").unwrap();
-        assert_eq!(Kafka.detect_ports("4.3.1"), vec![9095]);
+        assert_eq!(Kafka.detect_ports(ENV_ID, "4.3.1"), vec![9095]);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -534,17 +568,18 @@ mod tests {
         setup_instance(&tmp);
 
         write_config(
+            ENV_ID,
             "4.3.1",
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
 
-        let managed = managed_log_dir("4.3.1").unwrap();
+        let managed = managed_log_dir(ENV_ID, "4.3.1").unwrap();
         assert!(
             managed.ends_with("var/data/kafka/kafka-4.3.1/kafka"),
             "受管路径应在 var/data 下，实际 {managed:?}"
         );
-        let conf = component::config_path(NAME, "4.3.1", F_PROPS).unwrap();
+        let conf = component::config_path(ENV_ID, NAME, "4.3.1", F_PROPS).unwrap();
         let content = std::fs::read_to_string(&conf).unwrap();
         assert!(
             content.contains(&format!("log.dirs={}", managed.display())),
@@ -561,11 +596,11 @@ mod tests {
 
         // 手改配置后：判断跟着配置走（否则会每次启动都重复格式化）
         let custom = tmp.join("custom-logs");
-        let f = component::open_config(NAME, "4.3.1", F_PROPS).unwrap();
+        let f = component::open_config(ENV_ID, NAME, "4.3.1", F_PROPS).unwrap();
         f.set(K_LOG_DIRS, &custom.display().to_string()).unwrap();
-        assert_eq!(configured_log_dir("4.3.1").unwrap(), custom);
+        assert_eq!(configured_log_dir(ENV_ID, "4.3.1").unwrap(), custom);
         assert_eq!(
-            managed_log_dir("4.3.1").unwrap(),
+            managed_log_dir(ENV_ID, "4.3.1").unwrap(),
             managed,
             "受管路径是稳定的，不随配置变化"
         );
@@ -582,6 +617,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         setup_instance(&tmp);
         write_config(
+            ENV_ID,
             "4.3.1",
             &Effective::from_install(&install_params()).unwrap(),
         )
@@ -600,7 +636,7 @@ mod tests {
         assert!(save_field("broker_port", "0").is_err());
         assert!(save_field("broker_port", "80").is_err());
         // 端口未被改动
-        assert_eq!(Kafka.detect_ports("4.3.1"), vec![BROKER_DEFAULT]);
+        assert_eq!(Kafka.detect_ports(ENV_ID, "4.3.1"), vec![BROKER_DEFAULT]);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -613,13 +649,17 @@ mod tests {
         setup_instance(&tmp);
 
         write_config(
+            ENV_ID,
             "4.3.1",
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
-        let content =
-            std::fs::read_to_string(component::config_dir(NAME, "4.3.1").unwrap().join(F_PROPS))
-                .unwrap();
+        let content = std::fs::read_to_string(
+            component::config_dir(ENV_ID, NAME, "4.3.1")
+                .unwrap()
+                .join(F_PROPS),
+        )
+        .unwrap();
         assert!(
             content.contains("# Licensed to the Apache Software Foundation"),
             "官方模板注释必须保留（这是改成合并写的理由）"
@@ -635,15 +675,19 @@ mod tests {
         setup_instance(&tmp);
 
         write_config(
+            ENV_ID,
             "4.3.1",
             &Effective::from_install(&install_params()).unwrap(),
         )
         .unwrap();
         save_field("broker_port", "9095").unwrap();
 
-        let content =
-            std::fs::read_to_string(component::config_dir(NAME, "4.3.1").unwrap().join(F_PROPS))
-                .unwrap();
+        let content = std::fs::read_to_string(
+            component::config_dir(ENV_ID, NAME, "4.3.1")
+                .unwrap()
+                .join(F_PROPS),
+        )
+        .unwrap();
         assert!(
             content.contains(
                 "advertised.listeners=PLAINTEXT://localhost:9095,CONTROLLER://localhost:9093"
@@ -672,16 +716,19 @@ mod tests {
             "Kafka 应由 SoloStack 生成 env 文件"
         );
         // 写入 JAVA_HOME 后能被通用链路精确读回（启动注入走的正是这条路径）
-        let f = component::open_config(NAME, "4.3.1", F_ENV).unwrap();
+        let f = component::open_config(ENV_ID, NAME, "4.3.1", F_ENV).unwrap();
         f.set("JAVA_HOME", "/opt/jdk-17").unwrap();
         assert_eq!(
-            crate::component::fields::read_java_home(&Kafka, "4.3.1").as_deref(),
+            crate::component::fields::read_java_home(ENV_ID, &Kafka, "4.3.1").as_deref(),
             Some("/opt/jdk-17")
         );
 
-        let content =
-            std::fs::read_to_string(component::config_dir(NAME, "4.3.1").unwrap().join(F_ENV))
-                .unwrap();
+        let content = std::fs::read_to_string(
+            component::config_dir(ENV_ID, NAME, "4.3.1")
+                .unwrap()
+                .join(F_ENV),
+        )
+        .unwrap();
         assert!(
             content.starts_with("# SoloStack:begin"),
             "生成的 env 文件应带受管说明头"

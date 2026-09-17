@@ -18,6 +18,7 @@ pub type InstallParams = BTreeMap<String, String>;
 /// 之后配置文件就是唯一事实源；没有 install.json、也没有 etc/ 配置副本。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallConfig {
+    pub environment_id: String,
     pub component: String,
     pub version: String,
     pub source_id: String,

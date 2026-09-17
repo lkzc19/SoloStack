@@ -4,12 +4,16 @@
 
 pub mod app;
 pub mod component;
+pub mod environment;
 pub mod install;
 pub mod logs;
 
 use solostack_core::component::instances;
 
 /// 按组件名解析已安装实例（失败报「未安装」）。
-pub(crate) fn resolve(component: &str) -> Result<instances::Installed, String> {
-    instances::resolve(component)
+pub(crate) fn resolve(
+    environment_id: &str,
+    component: &str,
+) -> Result<instances::Installed, String> {
+    instances::resolve(environment_id, component)
 }

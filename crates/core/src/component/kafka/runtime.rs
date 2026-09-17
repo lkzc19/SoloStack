@@ -14,14 +14,15 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(300);
 
 impl Runtime for Kafka {
-    fn init(&self, version: &str) -> Result<(), String> {
-        format_storage_if_needed(version)?;
+    fn init(&self, environment_id: &str, version: &str) -> Result<(), String> {
+        format_storage_if_needed(environment_id, version)?;
         Ok(())
     }
 
-    fn start(&self, version: &str) -> Result<(), String> {
-        let conf = component::config_path(NAME, version, F_PROPS)?;
+    fn start(&self, environment_id: &str, version: &str) -> Result<(), String> {
+        let conf = component::config_path(environment_id, NAME, version, F_PROPS)?;
         exec::run_checked(
+            environment_id,
             &Kafka,
             version,
             "bin/kafka-server-start.sh",
@@ -32,8 +33,9 @@ impl Runtime for Kafka {
         Ok(())
     }
 
-    fn stop(&self, version: &str) -> Result<(), String> {
+    fn stop(&self, environment_id: &str, version: &str) -> Result<(), String> {
         exec::run_checked(
+            environment_id,
             &Kafka,
             version,
             "bin/kafka-server-stop.sh",
@@ -44,15 +46,20 @@ impl Runtime for Kafka {
         Ok(())
     }
 
-    fn service_specs(&self, version: &str) -> Vec<ServiceSpec> {
-        let root = paths::instance_dir(NAME, version)
+    fn service_specs(&self, environment_id: &str, version: &str) -> Vec<ServiceSpec> {
+        let root = paths::instance_dir(environment_id, NAME, version)
             .map(|path| path.display().to_string())
             .unwrap_or_else(|_| NAME.to_string());
         let needles = vec![root, "kafka.Kafka".to_string()];
-        let broker = read_broker(version).unwrap_or(BROKER_DEFAULT);
+        let broker = read_broker(environment_id, version).unwrap_or(BROKER_DEFAULT);
         vec![
-            ServiceSpec::new("broker", needles.clone(), [broker]),
-            ServiceSpec::new("controller", needles, [super::CONTROLLER_PORT]),
+            ServiceSpec::new(environment_id, "broker", needles.clone(), [broker]),
+            ServiceSpec::new(
+                environment_id,
+                "controller",
+                needles,
+                [super::CONTROLLER_PORT],
+            ),
         ]
     }
 }
@@ -64,15 +71,15 @@ impl Runtime for Kafka {
 /// - **必须带 `--standalone`**：组合模式（`process.roles=broker,controller`）单节点若
 ///   没配 `controller.quorum.voters`，StorageTool 会因「未指定初始 quorum」直接报错，
 ///   必须由 `--standalone` 显式声明自举（见 Kafka `StorageTool.scala`）。
-fn format_storage_if_needed(version: &str) -> Result<(), String> {
+fn format_storage_if_needed(environment_id: &str, version: &str) -> Result<(), String> {
     // 判断用的是「配置里 log.dirs 实际指向的位置」，而非受管默认路径：
     // 两者不一致时若按默认路径判断，会每次启动都尝试格式化同一目录
-    let log_dir = super::config::configured_log_dir(version)?;
+    let log_dir = super::config::configured_log_dir(environment_id, version)?;
     if log_dir.join("meta.properties").exists() {
         return Ok(());
     }
 
-    let conf = component::config_path(NAME, version, F_PROPS)?;
+    let conf = component::config_path(environment_id, NAME, version, F_PROPS)?;
     println!("首次使用，格式化 Kafka KRaft 存储...");
     let _ = crate::app::app_log::info(
         "init.kafka.format",
@@ -80,6 +87,7 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
     );
 
     let cluster_id = exec::run_to_string(
+        environment_id,
         &Kafka,
         version,
         "bin/kafka-storage.sh",
@@ -95,6 +103,7 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
     }
 
     exec::run_to_string(
+        environment_id,
         &Kafka,
         version,
         "bin/kafka-storage.sh",
@@ -116,13 +125,15 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+
     fn setup_fake_instance(tmp: &std::path::Path) {
         std::env::set_var("HOME", tmp);
-        let instance = crate::app::paths::instance_dir(NAME, "4.3.1").unwrap();
-        let config = component::config_dir(NAME, "4.3.1").unwrap();
+        let instance = crate::app::paths::instance_dir(ENV_ID, NAME, "4.3.1").unwrap();
+        let config = component::config_dir(ENV_ID, NAME, "4.3.1").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
-        let log_dir = super::super::config::managed_log_dir("4.3.1").unwrap();
+        let log_dir = super::super::config::managed_log_dir(ENV_ID, "4.3.1").unwrap();
 
         std::fs::create_dir_all(&config).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
@@ -156,10 +167,10 @@ mod tests {
 
         // 官方产物 meta.properties 存在 → 视为已格式化，不执行任何脚本
         // （此环境下 kafka 二进制并不存在，能返回 Ok 就证明它真的没跑脚本）
-        let log_dir = super::super::config::managed_log_dir("4.3.1").unwrap();
+        let log_dir = super::super::config::managed_log_dir(ENV_ID, "4.3.1").unwrap();
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("meta.properties"), "version=1\n").unwrap();
-        assert!(format_storage_if_needed("4.3.1").is_ok());
+        assert!(format_storage_if_needed(ENV_ID, "4.3.1").is_ok());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -172,12 +183,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         setup_fake_instance(&tmp);
 
-        let start_err = Kafka.start("4.3.1").unwrap_err();
+        let start_err = Kafka.start(ENV_ID, "4.3.1").unwrap_err();
         assert!(start_err.contains("执行失败"), "{start_err}");
         assert!(start_err.contains("start stdout"), "{start_err}");
         assert!(start_err.contains("start failed"), "{start_err}");
 
-        let stop_err = Kafka.stop("4.3.1").unwrap_err();
+        let stop_err = Kafka.stop(ENV_ID, "4.3.1").unwrap_err();
         assert!(stop_err.contains("执行失败"), "{stop_err}");
         assert!(stop_err.contains("stop stdout"), "{stop_err}");
         assert!(stop_err.contains("stop failed"), "{stop_err}");
@@ -187,7 +198,7 @@ mod tests {
 
     #[test]
     fn service_specs_share_combined_kafka_process() {
-        let specs = Kafka.service_specs("4.3.1");
+        let specs = Kafka.service_specs(ENV_ID, "4.3.1");
         let keys: Vec<&str> = specs.iter().map(|spec| spec.key).collect();
         assert_eq!(keys, vec!["broker", "controller"]);
         assert_eq!(specs[0].process_needles, specs[1].process_needles);

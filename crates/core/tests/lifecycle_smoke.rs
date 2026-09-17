@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use solostack_core::app::environment;
 use solostack_core::app::paths;
 use solostack_core::component::install_config::{InstallConfig, InstallParams};
 use solostack_core::component::{instances, schema, ConfigFieldUpdate};
@@ -66,12 +67,17 @@ fn run_component(name: &str) -> Result<(), String> {
 fn run_lifecycle(case: &SmokeCase, source_id: &str) -> Result<(), String> {
     let name = case.name.as_str();
     let version = case.version.as_str();
-    check(!instances::is_installed(name), "临时 HOME 不是干净状态")?;
+    let environment_id = case.environment_id.as_str();
+    check(
+        !instances::is_installed(environment_id, name),
+        "临时 HOME 不是干净状态",
+    )?;
 
     let params = install_params(name)?;
     let cancel = AtomicBool::new(false);
     install::install(
         &InstallConfig {
+            environment_id: environment_id.to_string(),
             component: name.to_string(),
             version: version.to_string(),
             source_id: source_id.to_string(),
@@ -81,27 +87,48 @@ fn run_lifecycle(case: &SmokeCase, source_id: &str) -> Result<(), String> {
         None,
         &cancel,
     )?;
-    check(instances::is_installed(name), "安装后未发现组件实例")?;
     check(
-        !init_marker(name, version)?.exists(),
+        instances::is_installed(environment_id, name),
+        "安装后未发现组件实例",
+    )?;
+    check(
+        !init_marker(environment_id, name, version)?.exists(),
         "首次启动前不应存在 init 产物",
     )?;
 
-    service::start(name, version)?;
-    wait_for_status(name, version, &Status::Running, STATUS_TIMEOUT)?;
-    let first_identity = read_identity(name, version)?;
+    service::start(environment_id, name, version)?;
+    wait_for_status(
+        environment_id,
+        name,
+        version,
+        &Status::Running,
+        STATUS_TIMEOUT,
+    )?;
+    let first_identity = read_identity(environment_id, name, version)?;
 
-    service::stop(name, version)?;
-    wait_for_status(name, version, &Status::Stopped, STATUS_TIMEOUT)?;
+    service::stop(environment_id, name, version)?;
+    wait_for_status(
+        environment_id,
+        name,
+        version,
+        &Status::Stopped,
+        STATUS_TIMEOUT,
+    )?;
 
-    let changed_port = save_restart_change(name, version)?;
-    service::start(name, version)?;
-    wait_for_status(name, version, &Status::Running, STATUS_TIMEOUT)?;
+    let changed_port = save_restart_change(environment_id, name, version)?;
+    service::start(environment_id, name, version)?;
+    wait_for_status(
+        environment_id,
+        name,
+        version,
+        &Status::Running,
+        STATUS_TIMEOUT,
+    )?;
     check(
-        read_identity(name, version)? == first_identity,
+        read_identity(environment_id, name, version)? == first_identity,
         "二次启动重新执行了 init，官方身份产物发生变化",
     )?;
-    let changed = schema::list_fields(name, version)?
+    let changed = schema::list_fields(environment_id, name, version)?
         .into_iter()
         .find(|field| field.id == changed_port.0)
         .ok_or_else(|| format!("重启后未找到配置字段 {}", changed_port.0))?;
@@ -113,8 +140,14 @@ fn run_lifecycle(case: &SmokeCase, source_id: &str) -> Result<(), String> {
         ),
     )?;
 
-    service::stop(name, version)?;
-    wait_for_status(name, version, &Status::Stopped, STATUS_TIMEOUT)?;
+    service::stop(environment_id, name, version)?;
+    wait_for_status(
+        environment_id,
+        name,
+        version,
+        &Status::Stopped,
+        STATUS_TIMEOUT,
+    )?;
     Ok(())
 }
 
@@ -140,7 +173,11 @@ fn install_params(name: &str) -> Result<InstallParams, String> {
     }
 }
 
-fn save_restart_change(name: &str, version: &str) -> Result<(String, String), String> {
+fn save_restart_change(
+    environment_id: &str,
+    name: &str,
+    version: &str,
+) -> Result<(String, String), String> {
     let (id, value) = match name {
         "hadoop" => ("yarn_rm_web_port", free_port(&[]).to_string()),
         "kafka" => (
@@ -150,6 +187,7 @@ fn save_restart_change(name: &str, version: &str) -> Result<(String, String), St
         _ => return Err(format!("没有 {name} 的 smoke test 配置变更")),
     };
     schema::save_fields(
+        environment_id,
         name,
         version,
         &[ConfigFieldUpdate {
@@ -160,20 +198,20 @@ fn save_restart_change(name: &str, version: &str) -> Result<(String, String), St
     Ok((id.to_string(), value))
 }
 
-fn init_marker(name: &str, version: &str) -> Result<PathBuf, String> {
+fn init_marker(environment_id: &str, name: &str, version: &str) -> Result<PathBuf, String> {
     match name {
-        "hadoop" => Ok(paths::var_data_instance_dir(name, version)
+        "hadoop" => Ok(paths::var_data_instance_dir(environment_id, name, version)
             .map_err(|e| e.to_string())?
             .join("name/current/VERSION")),
-        "kafka" => Ok(paths::var_data_instance_dir(name, version)
+        "kafka" => Ok(paths::var_data_instance_dir(environment_id, name, version)
             .map_err(|e| e.to_string())?
             .join("kafka/meta.properties")),
         _ => Err(format!("没有 {name} 的 init 产物定义")),
     }
 }
 
-fn read_identity(name: &str, version: &str) -> Result<String, String> {
-    let path = init_marker(name, version)?;
+fn read_identity(environment_id: &str, name: &str, version: &str) -> Result<String, String> {
+    let path = init_marker(environment_id, name, version)?;
     let content =
         std::fs::read_to_string(&path).map_err(|e| format!("读取 {} 失败: {e}", path.display()))?;
     match name {
@@ -192,19 +230,20 @@ fn read_identity(name: &str, version: &str) -> Result<String, String> {
 }
 
 fn wait_for_status(
+    environment_id: &str,
     name: &str,
     version: &str,
     expected: &Status,
     timeout: Duration,
 ) -> Result<(), String> {
     let started = Instant::now();
-    let mut last = service::component_status(name, version);
+    let mut last = service::component_status(environment_id, name, version);
     while started.elapsed() < timeout {
         if &last == expected {
             return Ok(());
         }
         std::thread::sleep(POLL_INTERVAL);
-        last = service::component_status(name, version);
+        last = service::component_status(environment_id, name, version);
     }
     Err(format!(
         "等待 {name} 状态 {expected:?} 超时（超过 {timeout:?}），最后状态: {last:?}"
@@ -235,6 +274,7 @@ fn check(condition: bool, message: impl Into<String>) -> Result<(), String> {
 struct SmokeCase {
     name: String,
     version: String,
+    environment_id: String,
     root: PathBuf,
     previous_home: Option<std::ffi::OsString>,
     cleaned: bool,
@@ -256,9 +296,12 @@ impl SmokeCase {
         }
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         std::env::set_var("HOME", &root);
+        let environment = environment::create("Smoke Test").map_err(|e| e.to_string())?;
+        environment::set_active_id(Some(&environment.id)).map_err(|e| e.to_string())?;
         Ok(Self {
             name: name.to_string(),
             version: version.to_string(),
+            environment_id: environment.id,
             root,
             previous_home,
             cleaned: false,
@@ -271,23 +314,29 @@ impl SmokeCase {
         }
 
         let mut errors = Vec::new();
-        if instances::is_installed(&self.name) {
-            let status = service::component_status(&self.name, &self.version);
+        if instances::is_installed(&self.environment_id, &self.name) {
+            let status = service::component_status(&self.environment_id, &self.name, &self.version);
             if status != Status::Stopped {
-                if let Err(error) = service::stop(&self.name, &self.version) {
+                if let Err(error) = service::stop(&self.environment_id, &self.name, &self.version) {
                     errors.push(format!("停止失败: {error}"));
                 }
-                if let Err(error) =
-                    wait_for_status(&self.name, &self.version, &Status::Stopped, STATUS_TIMEOUT)
-                {
+                if let Err(error) = wait_for_status(
+                    &self.environment_id,
+                    &self.name,
+                    &self.version,
+                    &Status::Stopped,
+                    STATUS_TIMEOUT,
+                ) {
                     errors.push(error);
                 }
             }
-            if let Err(error) = uninstall::uninstall(&self.name, &self.version, false) {
+            if let Err(error) =
+                uninstall::uninstall(&self.environment_id, &self.name, &self.version, false)
+            {
                 errors.push(format!("卸载失败: {error}"));
             }
         }
-        if instances::is_installed(&self.name) {
+        if instances::is_installed(&self.environment_id, &self.name) {
             errors.push("卸载后组件实例仍存在".to_string());
         }
 

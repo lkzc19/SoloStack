@@ -3,27 +3,39 @@ use crate::app::paths;
 /// 纯净卸载一个组件实例（幂等，可对未安装实例安全调用）。
 ///
 /// 删除范围：组件本体（配置就在其中）、运行日志、进程记录；`keep_data=false` 时连持久数据一起删。
-/// 下载缓存（var/downloads）不受影响。
-pub fn uninstall(name: &str, version: &str, keep_data: bool) -> Result<(), String> {
+/// 下载缓存（cache/downloads）不受影响。
+pub fn uninstall(
+    environment_id: &str,
+    name: &str,
+    version: &str,
+    keep_data: bool,
+) -> Result<(), String> {
     let operation = crate::app::app_log::Operation::begin(
         "uninstall",
         name,
         version,
         &format!("开始卸载 {name} v{version}（保留数据: {keep_data}）"),
     );
-    let result = uninstall_inner(name, version, keep_data);
+    let result = uninstall_inner(environment_id, name, version, keep_data);
     operation.finish(&result);
     result
 }
 
-fn uninstall_inner(name: &str, version: &str, keep_data: bool) -> Result<(), String> {
+fn uninstall_inner(
+    environment_id: &str,
+    name: &str,
+    version: &str,
+    keep_data: bool,
+) -> Result<(), String> {
     // 1. 先探活：组件仍在运行时用停止脚本优雅关闭（不直接 kill）
-    stop_running_processes(name, version);
+    stop_running_processes(environment_id, name, version);
 
-    let instance = paths::instance_dir(name, version).map_err(|e| e.to_string())?;
-    let vlog = paths::var_log_instance_dir(name, version).map_err(|e| e.to_string())?;
-    let run_file = paths::runtime_file(name, version).map_err(|e| e.to_string())?;
-    let vdata = paths::var_data_instance_dir(name, version).map_err(|e| e.to_string())?;
+    let instance = paths::instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
+    let vlog =
+        paths::var_log_instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
+    let run_file = paths::runtime_file(environment_id, name, version).map_err(|e| e.to_string())?;
+    let vdata =
+        paths::var_data_instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
 
     remove_dir_if_exists(&instance)?;
     remove_dir_if_exists(&vlog)?;
@@ -34,16 +46,16 @@ fn uninstall_inner(name: &str, version: &str, keep_data: bool) -> Result<(), Str
 
     // 2. 清理可能遗留的空父目录（`components/<组件>/`、`var/.../<组件>/`）。
     for parent in [
-        paths::component_dir(name).map_err(|e| e.to_string())?,
-        paths::var_dir()
+        paths::component_dir(environment_id, name).map_err(|e| e.to_string())?,
+        paths::var_dir(environment_id)
             .map_err(|e| e.to_string())?
             .join(paths::VAR_LOG_DIR)
             .join(name),
-        paths::var_dir()
+        paths::var_dir(environment_id)
             .map_err(|e| e.to_string())?
             .join(paths::VAR_DATA_DIR)
             .join(name),
-        paths::var_dir()
+        paths::var_dir(environment_id)
             .map_err(|e| e.to_string())?
             .join(paths::VAR_RUN_DIR)
             .join(name),
@@ -51,15 +63,18 @@ fn uninstall_inner(name: &str, version: &str, keep_data: bool) -> Result<(), Str
         remove_dir_if_empty(&parent);
     }
 
+    let mut environment = crate::app::environment::load(environment_id)?;
+    environment.remove_component(name)?;
+
     let _ = crate::app::app_log::info("uninstall.done", &format!("{name} v{version} 已卸载"));
     Ok(())
 }
 
 /// 卸载前停止组件：先按组件从配置精确读出的探活端口探活，存活才调用停止脚本
 /// 优雅关闭（不直接 kill）。
-fn stop_running_processes(name: &str, version: &str) {
+fn stop_running_processes(environment_id: &str, name: &str, version: &str) {
     let ports = crate::component::registry::by_component(name)
-        .map(|c| c.detect_ports(version))
+        .map(|c| c.detect_ports(environment_id, version))
         .unwrap_or_default();
     let running = ports
         .iter()
@@ -68,7 +83,7 @@ fn stop_running_processes(name: &str, version: &str) {
         return;
     }
     let _ = crate::app::app_log::info("uninstall.stop.begin", &format!("{name} 仍在运行，先停止"));
-    if let Err(e) = crate::lifecycle::service::stop(name, version) {
+    if let Err(e) = crate::lifecycle::service::stop(environment_id, name, version) {
         let _ =
             crate::app::app_log::error("uninstall.stop.failed", &format!("停止 {name} 失败: {e}"));
     }
@@ -108,23 +123,29 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let instance = paths::instance_dir("hadoop", "3.5.0").unwrap();
-        let vdata = paths::var_data_instance_dir("hadoop", "3.5.0").unwrap();
-        let vlog = paths::var_log_instance_dir("hadoop", "3.5.0").unwrap();
-        let run = paths::runtime_file("hadoop", "3.5.0").unwrap();
+        let mut environment = crate::app::environment::create("默认环境").unwrap();
+        environment.register_component("hadoop", "3.5.0").unwrap();
+        let environment_id = environment.id.clone();
+
+        let instance = paths::instance_dir(&environment_id, "hadoop", "3.5.0").unwrap();
+        let vdata = paths::var_data_instance_dir(&environment_id, "hadoop", "3.5.0").unwrap();
+        let vlog = paths::var_log_instance_dir(&environment_id, "hadoop", "3.5.0").unwrap();
+        let run = paths::runtime_file(&environment_id, "hadoop", "3.5.0").unwrap();
         for dir in [&instance, &vdata, &vlog] {
             std::fs::create_dir_all(dir).unwrap();
         }
         std::fs::create_dir_all(run.parent().unwrap()).unwrap();
         std::fs::write(&run, r#"{"pid": 1}"#).unwrap();
 
-        uninstall("hadoop", "3.5.0", false).unwrap();
+        uninstall(&environment_id, "hadoop", "3.5.0", false).unwrap();
 
         assert!(!instance.exists());
         assert!(!vdata.exists());
         assert!(!vlog.exists());
         assert!(!run.exists());
-        assert!(!paths::component_dir("hadoop").unwrap().exists());
+        assert!(!paths::component_dir(&environment_id, "hadoop")
+            .unwrap()
+            .exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -137,13 +158,18 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let vdata = paths::var_data_instance_dir("hadoop", "3.5.0").unwrap();
+        let mut environment = crate::app::environment::create("默认环境").unwrap();
+        environment.register_component("hadoop", "3.5.0").unwrap();
+        let environment_id = environment.id.clone();
+        let vdata = paths::var_data_instance_dir(&environment_id, "hadoop", "3.5.0").unwrap();
         std::fs::create_dir_all(vdata.join("name")).unwrap();
 
-        uninstall("hadoop", "3.5.0", true).unwrap();
+        uninstall(&environment_id, "hadoop", "3.5.0", true).unwrap();
 
         assert!(vdata.exists());
-        assert!(!paths::instance_dir("hadoop", "3.5.0").unwrap().exists());
+        assert!(!paths::instance_dir(&environment_id, "hadoop", "3.5.0")
+            .unwrap()
+            .exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

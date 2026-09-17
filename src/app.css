@@ -101,11 +101,15 @@
   display: none;
 }
 
-.content,
+.content {
+  position: relative;
+  z-index: 1;
+}
+
 .topbar,
 .page-header {
   position: relative;
-  z-index: 1;
+  z-index: 20;
 }
 
 /* ── 顶栏 ── */
@@ -158,6 +162,33 @@
   flex: 1;
 }
 
+.environment-readonly {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  min-width: min(150px, 32vw);
+  max-width: min(220px, 38vw);
+  padding: 0 10px 0 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(100, 116, 139, 0.08);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.environment-readonly-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
 /* 图标按钮（圆形浅色底） */
 .gear-btn,
 .add-btn {
@@ -202,32 +233,35 @@
 .ring {
   width: 22px;
   height: 22px;
-  transform: rotate(-90deg);
+  border-radius: 50%;
+  background: conic-gradient(
+    from -90deg,
+    var(--primary) 0deg var(--ring-progress, 0deg),
+    rgba(66, 184, 131, 0.18) var(--ring-progress, 0deg) 360deg
+  );
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3.5px),
+    #000 calc(100% - 3.5px)
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 3.5px),
+    #000 calc(100% - 3.5px)
+  );
+  transform-origin: center;
   animation: ring-breathe 1.8s ease-in-out infinite;
 }
 @keyframes ring-breathe {
   0%,
   100% {
     opacity: 1;
-    transform: rotate(-90deg) scale(1);
+    transform: scale(1);
   }
   50% {
     opacity: 0.5;
-    transform: rotate(-90deg) scale(1.1);
+    transform: scale(1.1);
   }
-}
-.ring-bg {
-  fill: none;
-  stroke: rgba(66, 184, 131, 0.18);
-  stroke-width: 3.5;
-}
-.ring-fg {
-  fill: none;
-  stroke: var(--primary);
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke-dasharray: 94.25;
-  transition: stroke-dashoffset 0.2s ease;
 }
 
 /* ── 主体（main 组件列表） ── */
@@ -1257,6 +1291,125 @@ input[type="number"] {
   color: var(--muted);
 }
 
+/* ── 环境管理 ── */
+.environment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.environment-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.environment-row.active {
+  border-color: rgba(66, 184, 131, 0.45);
+}
+
+.environment-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  border-radius: 8px;
+  color: #2563eb;
+}
+
+.environment-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.environment-name-row,
+.environment-rename-row,
+.environment-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.environment-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-hi);
+}
+
+.environment-active-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(66, 184, 131, 0.12);
+  color: var(--primary-deep);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.environment-components {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.environment-component {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.environment-empty {
+  color: var(--muted);
+}
+
+.environment-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.environment-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.environment-icon-btn:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary-deep);
+}
+
+.environment-icon-btn.destructive:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.environment-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ── 安装页 ── */
 /* 组件横条 tab */
 .component-tabs {
@@ -1265,6 +1418,9 @@ input[type="number"] {
   margin-bottom: 1.6rem;
 }
 .component-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 9px 22px;
   border: none;
   border-radius: var(--radius);
@@ -1287,7 +1443,6 @@ input[type="number"] {
   font-weight: 600;
   box-shadow: 0 4px 14px rgba(66, 184, 131, 0.3);
 }
-
 .install-fields {
   display: flex;
   gap: 1.2rem;
@@ -1308,10 +1463,40 @@ input[type="number"] {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 0.6rem;
+  height: 38px;
+  flex-shrink: 0;
 }
 .install-actions .log-spinner {
-  margin-left: auto;
+  margin-left: 0;
+}
+.install-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.install-submit-message {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+}
+.install-submit-message .msg,
+.install-rule {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  box-sizing: border-box;
+  margin: 0;
+}
+.install-rule {
+  padding: 0 14px;
+  border-radius: var(--radius);
+  background: rgba(100, 116, 139, 0.08);
+  color: var(--muted);
+  font-size: 12px;
+}
+.install-submit-button {
+  height: 38px;
 }
 
 /* 安装进度页 */

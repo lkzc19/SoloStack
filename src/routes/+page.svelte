@@ -14,6 +14,7 @@
   } from "lucide-svelte";
   import { componentAdapter } from "$lib/component-adapters/registry";
   import Button from "$lib/components/ui/button/button.svelte";
+  import EnvironmentSwitcher from "$lib/EnvironmentSwitcher.svelte";
   import { store, startComponent, stopComponent } from "$lib/stores.svelte.ts";
 
   interface WebUiUrl {
@@ -26,16 +27,21 @@
   // 组件列表就绪后逐个拉取各自的 WebUI 入口（已拉过的不重复）
   $effect(() => {
     for (const c of store.components) {
-      if (!(c.name in webUis)) {
+      const key = `${store.activeEnvironmentId}:${c.name}`;
+      if (!(key in webUis)) {
         void loadWebUis(c.name);
       }
     }
   });
 
   async function loadWebUis(name: string) {
+    const key = `${store.activeEnvironmentId}:${name}`;
     try {
-      const urls = await invoke<WebUiUrl[]>("get_web_ui_urls", { component: name });
-      webUis[name] = urls;
+      const urls = await invoke<WebUiUrl[]>("get_web_ui_urls", {
+        environmentId: store.activeEnvironmentId,
+        component: name,
+      });
+      webUis[key] = urls;
     } catch {
       /* 该组件无 WebUI 或尚未就绪时静默 */
     }
@@ -80,16 +86,10 @@
   <div class="topbar-spacer"></div>
   {#if store.installing}
     <button class="add-btn progress" onclick={openInstallProgress} aria-label="查看安装进度">
-      <svg class="ring" viewBox="0 0 36 36">
-        <circle class="ring-bg" cx="18" cy="18" r="15"></circle>
-        <circle
-          class="ring-fg"
-          cx="18"
-          cy="18"
-          r="15"
-          style={`stroke-dashoffset: ${94.25 * (1 - store.installPct / 100)}`}
-        ></circle>
-      </svg>
+      <span
+        class="ring"
+        style={`--ring-progress: ${store.installPct * 3.6}deg`}
+      ></span>
     </button>
   {:else if store.installFailed}
     <button class="add-btn failed" onclick={openInstallProgress} aria-label="查看安装失败">
@@ -100,11 +100,13 @@
       <Plus size={18} />
     </button>
   {/if}
+  <EnvironmentSwitcher />
 </header>
 
 <main class="content">
   <div class="component-list">
-    {#each store.components as component, i (component.name)}
+  {#each store.components as component, i (component.name)}
+      {@const webUiKey = `${store.activeEnvironmentId}:${component.name}`}
       {@const adapter = componentAdapter(component.name)}
       {@const starting = store.busy && store.busyAction === "start" && store.busyComponent === component.name}
       {@const stopping = store.busy && store.busyAction === "stop" && store.busyComponent === component.name}
@@ -118,9 +120,9 @@
         <div class="component-info">
           <div class="component-title-row">
             <span class="component-name">{component.display_name || component.name}</span>
-            {#if webUis[component.name]?.length}
+            {#if webUis[webUiKey]?.length}
               <span class="webui-sep">|</span>
-              {#each webUis[component.name] as wu (wu.name)}
+              {#each webUis[webUiKey] as wu (wu.name)}
                 <button class="webui-badge {component.status}" onclick={() => openWebUi(wu.url)} title={`打开 ${wu.name} WebUI`}>
                   {wu.name}
                 </button>
@@ -143,7 +145,7 @@
               size="sm"
               class="w-auto"
               onclick={() => stopComponent(component.name)}
-              disabled={store.busy}
+              disabled={store.busy || Boolean(store.switchingEnvironmentId)}
             >
               <Square size={14} />
               停止
@@ -153,7 +155,7 @@
               size="sm"
               class="w-auto"
               onclick={() => startComponent(component.name)}
-              disabled={store.busy}
+              disabled={store.busy || Boolean(store.switchingEnvironmentId)}
             >
               <Play size={14} />
               启动

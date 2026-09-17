@@ -13,7 +13,7 @@
 mod commands;
 mod tray;
 
-use commands::{app, component, install, logs};
+use commands::{app, component, environment, install, logs};
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,7 +23,46 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let _ = solostack_core::app::paths::migrate_legacy_layout();
+            if let Err(error) = solostack_core::app::paths::migrate_legacy_layout() {
+                let _ = solostack_core::app::app_log::error(
+                    "migration.legacy_layout.failed",
+                    &format!("旧应用目录迁移失败: {error}"),
+                );
+            }
+            if let Err(error) = solostack_core::app::environment::migrate_legacy_layout() {
+                let _ = solostack_core::app::app_log::error(
+                    "migration.environment.failed",
+                    &format!("环境目录迁移失败: {error}"),
+                );
+            }
+            if let Err(error) = solostack_core::app::environment::ensure_initialized() {
+                let _ = solostack_core::app::app_log::error(
+                    "migration.environment.initialize_failed",
+                    &format!("环境初始化失败: {error}"),
+                );
+            }
+            if let Ok(active_id) = solostack_core::app::environment::active_id() {
+                if let Ok(environments) = solostack_core::app::environment::list() {
+                    for environment in environments {
+                        if Some(environment.id.as_str()) == active_id.as_deref() {
+                            continue;
+                        }
+                        if let Err(error) =
+                            solostack_core::lifecycle::environment::stop_all_components(
+                                &environment,
+                            )
+                        {
+                            let _ = solostack_core::app::app_log::warn(
+                                "environment.startup.stop_failed",
+                                &format!(
+                                    "启动时停止非活动环境《{}》失败: {error}",
+                                    environment.name
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
             tray::setup(app)?;
             Ok(())
         })
@@ -52,6 +91,12 @@ pub fn run() {
             app::list_apps,
             app::set_log_viewer,
             app::open_log_file,
+            environment::list_environments,
+            environment::get_active_environment,
+            environment::create_environment,
+            environment::rename_environment,
+            environment::delete_environment,
+            environment::switch_environment,
             component::list_component_manifests,
             component::list_config_fields,
             component::save_config_fields,

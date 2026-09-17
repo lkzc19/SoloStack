@@ -18,6 +18,7 @@ use crate::platform::{jdk, process};
 ///
 /// 注入 JAVA_HOME 与调用方给的组件环境变量；非零退出或超时时返回错误。
 pub fn run_checked(
+    environment_id: &str,
     comp: &dyn Component,
     version: &str,
     script: &str,
@@ -25,7 +26,7 @@ pub fn run_checked(
     envs: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<process::ScriptOutput, String> {
-    let (dir, envs) = prepare(comp, version, envs)?;
+    let (dir, envs) = prepare(environment_id, comp, version, envs)?;
     let refs = as_refs(&envs);
     let context = app_log::current_context();
     let mut fields = BTreeMap::new();
@@ -104,6 +105,7 @@ pub fn run_checked(
 
 /// 执行脚本并返回标准输出（如 `kafka-storage.sh random-uuid`）。
 pub fn run_to_string(
+    environment_id: &str,
     comp: &dyn Component,
     version: &str,
     script: &str,
@@ -111,24 +113,28 @@ pub fn run_to_string(
     envs: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<String, String> {
-    Ok(run_checked(comp, version, script, args, envs, timeout)?.stdout)
+    Ok(run_checked(environment_id, comp, version, script, args, envs, timeout)?.stdout)
 }
 
 /// 解析实例目录 + 组装环境变量（含按需注入的 JAVA_HOME）。
 fn prepare(
+    environment_id: &str,
     comp: &dyn Component,
     version: &str,
     envs: &[(&str, &str)],
 ) -> Result<(PathBuf, Vec<(String, String)>), String> {
     let name = comp.component();
-    let dir = paths::instance_dir(name, version).map_err(|e| e.to_string())?;
+    let dir = paths::instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
     let mut resolved: Vec<(String, String)> = envs
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
     // 仅 Java 类组件注入 JAVA_HOME；自包含二进制组件不依赖本机 JDK
     if manifest::needs_java(name) {
-        resolved.push(("JAVA_HOME".to_string(), resolve_java_home(comp, version)?));
+        resolved.push((
+            "JAVA_HOME".to_string(),
+            resolve_java_home(environment_id, comp, version)?,
+        ));
     }
     Ok((dir, resolved))
 }
@@ -169,6 +175,7 @@ pub fn resolve_requested_jdk(requested: &str) -> Result<String, String> {
 /// `allow_any` 是安装期与运行期的**唯一**差别：安装时找不到匹配 JDK 就报错
 /// （不能让组件装在一个跑不起来的 JDK 上），运行期则必须尽力起来。
 fn select_jdk(
+    environment_id: &str,
     comp: &dyn Component,
     version: &str,
     requested: Option<&str>,
@@ -179,7 +186,7 @@ fn select_jdk(
         return resolve_requested_jdk(req);
     }
 
-    if let Some(home) = super::fields::read_java_home(comp, version) {
+    if let Some(home) = super::fields::read_java_home(environment_id, comp, version) {
         // 环境文件里记的 JDK 可能已被卸载，路径不在就继续往下找
         if std::path::Path::new(&home).is_dir() {
             return Ok(home);
@@ -206,17 +213,23 @@ fn select_jdk(
 }
 
 /// 运行期注入用：允许兜底到任意本机 JDK（组件必须能起来）。
-pub fn resolve_java_home(comp: &dyn Component, version: &str) -> Result<String, String> {
-    select_jdk(comp, version, None, true)
+pub fn resolve_java_home(
+    environment_id: &str,
+    comp: &dyn Component,
+    version: &str,
+) -> Result<String, String> {
+    select_jdk(environment_id, comp, version, None, true)
 }
 
 /// 安装期用：用户指定 → manifest 支持版本，找不到即报错（不静默用任意 JDK）。
 pub fn resolve_jdk_for_install(
+    environment_id: &str,
     comp: &dyn Component,
     version: &str,
     requested: &str,
 ) -> Result<String, String> {
     select_jdk(
+        environment_id,
         comp,
         version,
         (!requested.trim().is_empty()).then_some(requested),
@@ -239,7 +252,7 @@ mod tests {
         // 环境文件不存在时走 manifest / 本机 JDK 回退；
         // 本机没有任何 JDK 时允许报错，但不得 panic
         let kafka = registry::by_component("kafka").expect("kafka 应已注册");
-        let r = resolve_java_home(kafka, "4.3.1");
+        let r = resolve_java_home("00000000-0000-4000-8000-000000000001", kafka, "4.3.1");
         if let Ok(home) = r {
             assert!(!home.is_empty());
         }

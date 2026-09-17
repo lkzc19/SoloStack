@@ -38,10 +38,11 @@ use crate::platform::process::ServiceSpec;
 /// 配置字段能力：向前端提供「字段当前值」，并为整组字段变更生成写入计划。
 pub trait FieldSchema {
     /// 全部可配置字段的当前值（呈现与布局由前端表单决定，这里只提供数据）。
-    fn field_values(&self, version: &str) -> Vec<ConfigFieldValue>;
+    fn field_values(&self, environment_id: &str, version: &str) -> Vec<ConfigFieldValue>;
     /// 校验整组字段并生成文件写入计划；plan 阶段不允许写盘。
     fn plan_field_updates(
         &self,
+        environment_id: &str,
         version: &str,
         updates: &[ConfigFieldUpdate],
     ) -> Result<ConfigPlan, String>;
@@ -56,7 +57,7 @@ pub trait ConfigLifecycle {
     fn config_layout(&self) -> ConfigLayout;
     /// 探活端口：从本组件配置文件**精确读**出实际生效的端口。
     /// 单项读不到时回退该项默认值（自愈），故实现不返回空。
-    fn detect_ports(&self, version: &str) -> Vec<u16>;
+    fn detect_ports(&self, environment_id: &str, version: &str) -> Vec<u16>;
     /// 声明本组件的安装参数（id + 默认值），供前端预填表单。
     ///
     /// 只声明「有哪些、默认多少」；类型与范围由 `apply_install_config` 解析时校验，
@@ -70,12 +71,18 @@ pub trait ConfigLifecycle {
     /// 安装时把安装参数落进官方配置文件（解析校验、端口占用避让都在此完成）。
     fn apply_install_config(
         &self,
+        environment_id: &str,
         version: &str,
         params: &crate::component::install_config::InstallParams,
     ) -> Result<(), String>;
     /// 启动 / 打开配置页前校验并补齐受管配置。默认实现 = 校验配置文件存在。
-    fn ensure_config(&self, version: &str) -> Result<(), String> {
-        validate_layout(self.component(), version, &self.config_layout())
+    fn ensure_config(&self, environment_id: &str, version: &str) -> Result<(), String> {
+        validate_layout(
+            environment_id,
+            self.component(),
+            version,
+            &self.config_layout(),
+        )
     }
     /// Java 组件的 JAVA_HOME 落点（相对实例的官方环境文件，如 hadoop-env.sh）。
     /// 返回 None = 该组件没有可承载 JAVA_HOME 的官方文件，启动时实时解析本机 JDK。
@@ -87,17 +94,17 @@ pub trait ConfigLifecycle {
 /// 运行生命周期：启停序列 / WebUI。
 pub trait Runtime {
     /// 首次运行初始化；必须幂等，由生命周期层在 `start` 前调用。
-    fn init(&self, _version: &str) -> Result<(), String> {
+    fn init(&self, _environment_id: &str, _version: &str) -> Result<(), String> {
         Ok(())
     }
-    fn start(&self, version: &str) -> Result<(), String>;
-    fn stop(&self, version: &str) -> Result<(), String>;
+    fn start(&self, environment_id: &str, version: &str) -> Result<(), String>;
+    fn stop(&self, environment_id: &str, version: &str) -> Result<(), String>;
     /// 该组件实例预期运行的服务、进程命令行特征和监听端口。
-    fn service_specs(&self, _version: &str) -> Vec<ServiceSpec> {
+    fn service_specs(&self, _environment_id: &str, _version: &str) -> Vec<ServiceSpec> {
         Vec::new()
     }
     /// WebUI 跳转地址(从配置精确读出的端口推导)，默认无。
-    fn web_uis(&self, _version: &str) -> Vec<WebUi> {
+    fn web_uis(&self, _environment_id: &str, _version: &str) -> Vec<WebUi> {
         Vec::new()
     }
 }
@@ -117,15 +124,16 @@ pub trait Component: FieldSchema + ConfigLifecycle + Runtime + Send + Sync {
 
 /// 校验布局声明的配置文件都存在（缺失即报错，不静默用空配置启动）。
 pub(crate) fn validate_layout(
+    environment_id: &str,
     component: &str,
     version: &str,
     layout: &ConfigLayout,
 ) -> Result<(), String> {
     for file in layout.files {
-        let path = config_path(component, version, file)?;
+        let path = config_path(environment_id, component, version, file)?;
         if !path.is_file() {
             return Err(format!(
-                "组件配置缺失: {}（组件包布局与声明不符或文件被删除，可重装该组件修复）",
+                "组件配置缺失: {}（组件包布局与声明不符或文件被删除，请先卸载后重新安装）",
                 path.display()
             ));
         }
@@ -134,27 +142,35 @@ pub(crate) fn validate_layout(
 }
 
 /// 组件配置目录：`components/<组件>/<组件>-<版本>/<布局目录>`。
-pub fn config_dir(component: &str, version: &str) -> Result<PathBuf, String> {
+pub fn config_dir(environment_id: &str, component: &str, version: &str) -> Result<PathBuf, String> {
     let layout = registry::by_component(component)
         .map(|c| c.config_layout())
         .ok_or_else(|| format!("组件 {component} 未注册"))?;
-    Ok(crate::app::paths::instance_dir(component, version)
-        .map_err(|e| e.to_string())?
-        .join(layout.dir))
+    Ok(
+        crate::app::paths::instance_dir(environment_id, component, version)
+            .map_err(|e| e.to_string())?
+            .join(layout.dir),
+    )
 }
 
 /// 组件配置文件绝对路径。
-pub fn config_path(component: &str, version: &str, file: &str) -> Result<PathBuf, String> {
-    Ok(config_dir(component, version)?.join(file))
+pub fn config_path(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+    file: &str,
+) -> Result<PathBuf, String> {
+    Ok(config_dir(environment_id, component, version)?.join(file))
 }
 
 /// 打开组件配置文件（按扩展名分发格式）。
 pub fn open_config(
+    environment_id: &str,
     component: &str,
     version: &str,
     file: &str,
 ) -> Result<Box<dyn ConfigFile>, String> {
-    config::open(config_path(component, version, file)?)
+    config::open(config_path(environment_id, component, version, file)?)
 }
 
 /// 校验安装参数都是该组件声明过的。
@@ -183,9 +199,9 @@ pub fn validate_install_params(
 }
 
 /// 启动 / 打开配置页前校验并补齐组件配置（未注册组件优雅降级为 Ok）。
-pub fn prepare_config(component: &str, version: &str) -> Result<(), String> {
+pub fn prepare_config(environment_id: &str, component: &str, version: &str) -> Result<(), String> {
     if let Some(c) = registry::by_component(component) {
-        c.ensure_config(version)?;
+        c.ensure_config(environment_id, version)?;
     }
     Ok(())
 }
@@ -197,7 +213,12 @@ mod tests {
     #[test]
     fn prepare_unknown_component_is_noop() {
         // 未注册组件优雅降级：不 panic、不建目录，由上层给出「不支持的组件」
-        assert!(prepare_config("no-such-component", "0.0.0").is_ok());
+        assert!(prepare_config(
+            "00000000-0000-4000-8000-000000000001",
+            "no-such-component",
+            "0.0.0"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -224,13 +245,16 @@ mod tests {
         let tmp = std::env::temp_dir().join("solostack-component-path");
         std::env::set_var("HOME", &tmp);
 
-        let p = config_path("hadoop", "3.5.0", "hdfs-site.xml").unwrap();
+        let environment_id = "00000000-0000-4000-8000-000000000001";
+        let p = config_path(environment_id, "hadoop", "3.5.0", "hdfs-site.xml").unwrap();
         assert_eq!(
             p,
-            tmp.join(".solostack/components/hadoop/hadoop-3.5.0/etc/hadoop/hdfs-site.xml")
+            tmp.join(".solostack/environments")
+                .join(environment_id)
+                .join("components/hadoop/hadoop-3.5.0/etc/hadoop/hdfs-site.xml")
         );
 
-        let k = config_path("kafka", "4.3.1", "server.properties").unwrap();
+        let k = config_path(environment_id, "kafka", "4.3.1", "server.properties").unwrap();
         assert!(k.ends_with("kafka-4.3.1/config/server.properties"));
     }
 }

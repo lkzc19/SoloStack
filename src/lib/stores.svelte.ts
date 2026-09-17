@@ -7,6 +7,7 @@ import { validateInstalledAdapters } from "./component-adapters/registry";
 import type {
   ComponentInfo,
   ComponentStatusInfo,
+  EnvironmentInfo,
   InstallProgressPayload,
   Status,
   ThemeMode,
@@ -17,6 +18,10 @@ import type {
 // 但允许 mutate 其属性；各页面通过 store.xxx 读写）。
 export const store = $state({
   components: [] as UiComponent[],
+  environments: [] as EnvironmentInfo[],
+  activeEnvironmentId: "",
+  activeEnvironmentName: "",
+  switchingEnvironmentId: "",
   selectedName: "",
   rootDir: "",
   appVersion: "",
@@ -46,6 +51,10 @@ const statusText: Record<Status, string> = {
 // 当前选中的组件（$derived 不能从 module 导出，故导出取值函数）
 export function getSelected() {
   return store.components.find((c) => c.name === store.selectedName) ?? null;
+}
+
+export function activeEnvironment() {
+  return store.environments.find((environment) => environment.active) ?? null;
 }
 
 // ── 工具 ──────────────────────────────────────────────
@@ -132,12 +141,20 @@ export async function boot() {
 
 export async function loadMain() {
   try {
+    await loadEnvironments();
+    const environment = activeEnvironment();
+    if (!environment) {
+      store.components = [];
+      return;
+    }
     const [list, root] = await Promise.all([
-      invoke<ComponentInfo[]>("list_component_templates"),
+      invoke<ComponentInfo[]>("list_component_templates", {
+        environmentId: environment.id,
+      }),
       invoke<string>("get_root_dir"),
     ]);
     store.rootDir = root;
-    await loadComponents(list);
+    await loadComponents(environment.id, list);
   } catch (e) {
     store.errorMsg = String(e);
   }
@@ -145,11 +162,53 @@ export async function loadMain() {
 
 export async function refreshComponents() {
   try {
-    const list = await invoke<ComponentInfo[]>("list_component_templates");
-    await loadComponents(list);
+    if (!store.activeEnvironmentId) await loadEnvironments();
+    if (!store.activeEnvironmentId) return;
+    const list = await invoke<ComponentInfo[]>("list_component_templates", {
+      environmentId: store.activeEnvironmentId,
+    });
+    await loadComponents(store.activeEnvironmentId, list);
   } catch {
     /* 轮询失败静默，避免打断操作 */
   }
+}
+
+export async function loadEnvironments() {
+  store.environments = await invoke<EnvironmentInfo[]>("list_environments");
+  const active = store.environments.find((environment) => environment.active);
+  store.activeEnvironmentId = active?.id ?? "";
+  store.activeEnvironmentName = active?.name ?? "";
+}
+
+export async function switchEnvironment(id: string) {
+  const environment = store.environments.find((item) => item.id === id);
+  if (!environment || environment.active || store.switchingEnvironmentId) return;
+  store.switchingEnvironmentId = id;
+  store.errorMsg = "";
+  try {
+    await invoke("switch_environment", { id });
+    await loadMain();
+    flashSuccess(`已切换到 ${environment.name}`);
+  } catch (error) {
+    store.errorMsg = String(error);
+  } finally {
+    store.switchingEnvironmentId = "";
+  }
+}
+
+export async function createEnvironment(name: string) {
+  await invoke("create_environment", { name });
+  await loadEnvironments();
+}
+
+export async function renameEnvironment(id: string, name: string) {
+  await invoke("rename_environment", { id, name });
+  await loadEnvironments();
+}
+
+export async function deleteEnvironment(id: string) {
+  await invoke("delete_environment", { id });
+  await loadEnvironments();
 }
 
 function sleep(ms: number) {
@@ -170,13 +229,14 @@ async function waitForStatus(name: string, target: "running" | "stopped", timeou
   return false;
 }
 
-export async function loadComponents(list: ComponentInfo[]) {
+export async function loadComponents(environmentId: string, list: ComponentInfo[]) {
   validateInstalledAdapters(list);
   const withStatus = await Promise.all(
     list.map(async (c) => {
       let status: Status = "not_installed";
       if (c.installed) {
         const info = await invoke<ComponentStatusInfo>("get_component_status", {
+          environmentId,
           component: c.name,
         });
         status = normalizeStatus(info.status);
@@ -184,7 +244,9 @@ export async function loadComponents(list: ComponentInfo[]) {
       return { ...c, status, statusText: statusText[status] };
     })
   );
-  store.components = withStatus;
+  if (store.activeEnvironmentId === environmentId) {
+    store.components = withStatus;
+  }
 }
 
 export function normalizeStatus(s: string): Status {
@@ -226,6 +288,7 @@ export function handleInstallProgress(p: InstallProgressPayload) {
 
 // ── 安装操作 ─────────────────────────────────────────
 export interface InstallParams {
+  environmentId: string;
   component: string;
   version: string;
   sourceId: string;
@@ -246,6 +309,7 @@ export async function doInstall(params: InstallParams) {
   store.installVersion = params.version;
   try {
     await invoke("install_component", {
+      environmentId: params.environmentId,
       component: params.component,
       version: params.version,
       sourceId: params.sourceId,
@@ -299,7 +363,11 @@ export async function startComponent(name: string) {
   store.errorMsg = "";
   store.successMsg = "";
   try {
-    await invoke("start_component", { component: name, service: null });
+    await invoke("start_component", {
+      environmentId: store.activeEnvironmentId,
+      component: name,
+      service: null,
+    });
     // 等端口就绪，期间按钮显示「启动中…」
     const ok = await waitForStatus(name, "running", 60000);
     if (ok) {
@@ -324,7 +392,11 @@ export async function stopComponent(name: string) {
   store.errorMsg = "";
   store.successMsg = "";
   try {
-    await invoke("stop_component", { component: name, service: null });
+    await invoke("stop_component", {
+      environmentId: store.activeEnvironmentId,
+      component: name,
+      service: null,
+    });
     // 等进程退出，期间按钮显示「停止中…」
     const ok = await waitForStatus(name, "stopped", 60000);
     if (ok) {
@@ -349,9 +421,13 @@ export async function doUninstall(name: string, version: string, keepData: boole
   store.errorMsg = "";
   store.successMsg = "";
   try {
-    await invoke("uninstall_component", { component: name, keepData });
+    await invoke("uninstall_component", {
+      environmentId: store.activeEnvironmentId,
+      component: name,
+      keepData,
+    });
     flashSuccess(`${name} v${version} 已卸载`);
-    await refreshComponents();
+    await loadMain();
     goto("/");
   } catch (e) {
     store.errorMsg = String(e);

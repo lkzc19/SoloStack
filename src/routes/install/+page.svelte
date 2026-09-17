@@ -11,7 +11,7 @@
     validateComponentRegistry,
     validateInstallParamIds,
   } from "$lib/component-adapters/registry";
-  import { store, doInstall } from "$lib/stores.svelte.ts";
+  import { activeEnvironment, store, doInstall } from "$lib/stores.svelte.ts";
   import type { ManifestInfo, InstallSource, JdkInfo, InstallParam } from "$lib/types";
 
   let componentConfigs = $state<ManifestInfo[]>([]);
@@ -49,6 +49,11 @@
   const currentConfig = $derived(componentConfigs.find((c) => c.component === installComponent) ?? null);
   const hasJava = $derived(Object.keys(currentConfig?.java_support ?? {}).length > 0);
   const installAdapter = $derived(componentAdapter(installComponent));
+  const currentEnvironment = $derived(activeEnvironment());
+  const currentInstall = $derived(
+    currentEnvironment?.components.find((item) => item.component === installComponent) ?? null
+  );
+  const componentInstalled = $derived(Boolean(currentInstall));
 
   onMount(() => {
     loadInstallData();
@@ -162,10 +167,20 @@
   }
 
   function startInstall() {
-    if (store.installing || !installComponent || !installVersion) return;
+    if (
+      store.installing ||
+      store.switchingEnvironmentId ||
+      !store.activeEnvironmentId ||
+      !installComponent ||
+      !installVersion ||
+      componentInstalled
+    ) {
+      return;
+    }
     if (hasJava && !installJdk) return;
     goto("/install/progress");
     void doInstall({
+      environmentId: store.activeEnvironmentId,
       component: installComponent,
       version: installVersion,
       sourceId: installSourceId,
@@ -176,7 +191,15 @@
   }
 </script>
 
-<PageHeader title="安装组件" />
+<PageHeader title="安装组件">
+  {#snippet actions()}
+    <span class="environment-readonly" aria-disabled="true" title="当前环境">
+      <span class="environment-readonly-label">
+        {currentEnvironment?.name ?? "未选择环境"}
+      </span>
+    </span>
+  {/snippet}
+</PageHeader>
 
 <div class="install-view">
   <div class="page-body">
@@ -250,21 +273,37 @@
       {/if}
     </section>
 
-    {#if store.errorMsg}
-      <p class="msg error">{store.errorMsg}</p>
-    {/if}
-
-    <div class="install-actions">
-      <Button
-        size="md"
-        onclick={startInstall}
-        disabled={store.installing || !installComponent || !installVersion || (hasJava && !installJdk)}
-      >
-        {store.installing ? "安装中…" : "开始安装"}
-      </Button>
-      {#if store.installing}
-        <span class="log-spinner"></span>
-      {/if}
+    <div class="install-submit-row">
+      <div class="install-submit-message">
+        {#if componentInstalled}
+          <p class="msg error">
+            当前环境已安装 {installComponent} v{currentInstall?.version}，请先卸载后再安装。
+          </p>
+        {:else if store.errorMsg}
+          <p class="msg error">{store.errorMsg}</p>
+        {:else}
+          <p class="install-rule">每个环境同一类组件只能装一种</p>
+        {/if}
+      </div>
+      <div class="install-actions">
+        <Button
+          size="md"
+          class="install-submit-button"
+          onclick={startInstall}
+          disabled={store.installing ||
+            Boolean(store.switchingEnvironmentId) ||
+            !store.activeEnvironmentId ||
+            !installComponent ||
+            !installVersion ||
+            componentInstalled ||
+            (hasJava && !installJdk)}
+        >
+          {store.installing ? "安装中…" : "开始安装"}
+        </Button>
+        {#if store.installing}
+          <span class="log-spinner"></span>
+        {/if}
+      </div>
     </div>
   </div>
 </div>

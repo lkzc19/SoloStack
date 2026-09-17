@@ -7,22 +7,26 @@ use super::resolve;
 
 /// 列出组件日志文件（完整路径，按修改时间倒序）。
 #[tauri::command]
-pub fn list_component_logs(component: String) -> Result<Vec<String>, String> {
-    let i = resolve(&component)?;
-    logs::list_log_files(&i.name, &i.version)
+pub fn list_component_logs(
+    environment_id: String,
+    component: String,
+) -> Result<Vec<String>, String> {
+    let i = resolve(&environment_id, &component)?;
+    logs::list_log_files(&i.environment_id, &i.name, &i.version)
         .map(|v| v.into_iter().map(|p| p.display().to_string()).collect())
 }
 
 /// 读取日志文件末尾若干行。仅允许该组件名下的日志路径。
 #[tauri::command]
 pub fn read_component_log_tail(
+    environment_id: String,
     component: String,
     path: String,
     lines: usize,
 ) -> Result<String, String> {
-    let i = resolve(&component)?;
+    let i = resolve(&environment_id, &component)?;
     let log_path = std::path::PathBuf::from(&path);
-    let log_path = logs::validated_log_file(&i.name, &i.version, &log_path)?;
+    let log_path = logs::validated_log_file(&i.environment_id, &i.name, &i.version, &log_path)?;
     logs::tail(&log_path, lines)
 }
 

@@ -36,6 +36,7 @@ pub struct ScriptOutput {
 /// 一个组件实例内部的逻辑运行服务。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceSpec {
+    pub environment_id: String,
     pub key: &'static str,
     pub process_needles: Vec<String>,
     pub ports: Vec<u16>,
@@ -43,11 +44,13 @@ pub struct ServiceSpec {
 
 impl ServiceSpec {
     pub fn new(
+        environment_id: impl Into<String>,
         key: &'static str,
         process_needles: impl IntoIterator<Item = impl Into<String>>,
         ports: impl IntoIterator<Item = u16>,
     ) -> Self {
         Self {
+            environment_id: environment_id.into(),
             key,
             process_needles: process_needles.into_iter().map(Into::into).collect(),
             ports: ports.into_iter().collect(),
@@ -108,9 +111,11 @@ where
         let matched_processes: Vec<&ProcessIdentity> = processes
             .iter()
             .filter(|process| {
-                spec.process_needles
-                    .iter()
-                    .all(|needle| process.command_line.contains(needle))
+                process.command_line.contains(&spec.environment_id)
+                    && spec
+                        .process_needles
+                        .iter()
+                        .all(|needle| process.command_line.contains(needle))
             })
             .collect();
         let matched_pids: Vec<u32> = matched_processes
@@ -623,11 +628,12 @@ mod tests {
     #[test]
     fn service_is_running_only_when_owned_process_listens() {
         let specs = [ServiceSpec::new(
+            "env-a",
             "namenode",
             ["/managed/hadoop", "NameNode"],
             [9870, 8020],
         )];
-        let processes = [process(42, "/managed/hadoop/bin/java NameNode")];
+        let processes = [process(42, "/env-a/managed/hadoop/bin/java NameNode")];
 
         let observed = classify_services(&specs, &processes, |_| Ok(vec![42])).unwrap();
         assert_eq!(observed[0].state, ServiceState::Running);
@@ -637,11 +643,12 @@ mod tests {
     #[test]
     fn service_is_starting_when_process_exists_but_port_is_not_ready() {
         let specs = [ServiceSpec::new(
+            "env-a",
             "namenode",
             ["/managed/hadoop", "NameNode"],
             [9870],
         )];
-        let processes = [process(42, "/managed/hadoop/bin/java NameNode")];
+        let processes = [process(42, "/env-a/managed/hadoop/bin/java NameNode")];
 
         let observed = classify_services(&specs, &processes, |_| Ok(Vec::new())).unwrap();
         assert_eq!(observed[0].state, ServiceState::Starting);
@@ -650,11 +657,12 @@ mod tests {
     #[test]
     fn service_conflicts_when_port_belongs_to_another_process() {
         let specs = [ServiceSpec::new(
+            "env-a",
             "namenode",
             ["/managed/hadoop", "NameNode"],
             [9870],
         )];
-        let processes = [process(42, "/managed/hadoop/bin/java NameNode")];
+        let processes = [process(42, "/env-a/managed/hadoop/bin/java NameNode")];
 
         let observed = classify_services(&specs, &processes, |_| Ok(vec![99])).unwrap();
         assert_eq!(observed[0].state, ServiceState::Conflict);
@@ -663,12 +671,27 @@ mod tests {
     #[test]
     fn service_is_stopped_when_neither_process_nor_port_exists() {
         let specs = [ServiceSpec::new(
+            "env-a",
             "namenode",
             ["/managed/hadoop", "NameNode"],
             [9870],
         )];
 
         let observed = classify_services(&specs, &[], |_| Ok(Vec::new())).unwrap();
+        assert_eq!(observed[0].state, ServiceState::Stopped);
+    }
+
+    #[test]
+    fn service_ignores_same_component_process_from_another_environment() {
+        let specs = [ServiceSpec::new(
+            "env-a",
+            "namenode",
+            ["/managed/hadoop", "NameNode"],
+            [9870],
+        )];
+        let processes = [process(42, "/env-b/managed/hadoop/bin/java NameNode")];
+
+        let observed = classify_services(&specs, &processes, |_| Ok(Vec::new())).unwrap();
         assert_eq!(observed[0].state, ServiceState::Stopped);
     }
 }

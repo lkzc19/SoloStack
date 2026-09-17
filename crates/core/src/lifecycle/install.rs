@@ -54,22 +54,26 @@ fn install_inner(
 ) -> Result<std::path::PathBuf, String> {
     let name = &config.component;
     let version = &config.version;
+    let environment_id = &config.environment_id;
 
     // 进度回调用 Arc<Mutex> 贯穿各阶段
     let shared: Option<Arc<Mutex<InstallProgress>>> = progress.map(|p| Arc::new(Mutex::new(p)));
 
     // 1. 组件必须已注册；下载/解压/生成任一失败都会由守卫清理已建产物
     registry::by_component(name).ok_or_else(|| format!("组件 {name} 未注册"))?;
+    let environment = crate::app::environment::load(environment_id)?;
+    environment.ensure_can_install(name, version)?;
 
     // 清理守卫：安装未正常完成（报错 / 取消）时删除本次已建实例目录与配置副本
     let mut guard = InstallGuard {
+        environment_id: environment_id.clone(),
         name: name.clone(),
         version: version.clone(),
         stage: Stage::Downloading,
         done: false,
     };
 
-    // 2. 从下载源解析完整地址，下载到 var/downloads/（支持取消；已下载则复用）
+    // 2. 从下载源解析完整地址，下载到 cache/downloads/（支持取消；已下载则复用）
     let artifact = crate::package::manifest::resolve_artifact(name, &config.source_id, version)?;
     let cached = download::target_path(&artifact.url)?.exists();
     emit(&shared, ProgressEvent::Checking(cached));
@@ -127,7 +131,7 @@ fn install_inner(
     // 3. 解压到实例目录（tar.gz）
     guard.stage = Stage::Extracting;
     emit(&shared, ProgressEvent::Extracting);
-    let instance = paths::instance_dir(name, version).map_err(|e| e.to_string())?;
+    let instance = paths::instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
     extract::extract_tar_gz(&archive, &instance)?;
     let _ = crate::app::app_log::info(
         "install.extract.done",
@@ -151,7 +155,11 @@ fn install_inner(
         &format!("{name} v{version} 配置生成完成"),
     );
 
-    // 5. 通知完成
+    // 5. 登记环境组件清单；失败时由守卫回滚实例目录
+    let mut environment = crate::app::environment::load(environment_id)?;
+    environment.register_component(name, version)?;
+
+    // 6. 通知完成
     guard.done = true;
     emit(&shared, ProgressEvent::Done);
     let _ = crate::app::app_log::info("install.done", &format!("{name} v{version} 安装完成"));
@@ -174,7 +182,7 @@ fn apply_install(config: &InstallConfig) -> Result<(), String> {
     let version = &config.version;
     let c = registry::by_component(name).ok_or_else(|| format!("组件 {name} 未注册"))?;
     crate::component::validate_install_params(name, version, &config.params)?;
-    c.apply_install_config(version, &config.params)?;
+    c.apply_install_config(&config.environment_id, version, &config.params)?;
     apply_java_home(config, c)?;
     Ok(())
 }
@@ -194,9 +202,14 @@ fn apply_java_home(
     let Some(env_file) = c.java_env_file() else {
         return Ok(());
     };
-    let home =
-        crate::component::exec::resolve_jdk_for_install(c, &config.version, &config.jdk_version)?;
-    let path = crate::component::config_path(name, &config.version, env_file)?;
+    let home = crate::component::exec::resolve_jdk_for_install(
+        &config.environment_id,
+        c,
+        &config.version,
+        &config.jdk_version,
+    )?;
+    let path =
+        crate::component::config_path(&config.environment_id, name, &config.version, env_file)?;
     let mut plan = crate::config::ConfigPlan::new();
     plan.set(path, "JAVA_HOME", home)?;
     crate::config::apply_plan(&plan)
@@ -213,6 +226,7 @@ enum Stage {
 /// 清理实例目录（配置就在实例目录内，一并清掉），并回收空的组件父目录。
 /// 不触碰下载缓存（已完整下载的包保留）。
 struct InstallGuard {
+    environment_id: String,
     name: String,
     version: String,
     stage: Stage,
@@ -225,10 +239,10 @@ impl Drop for InstallGuard {
             return;
         }
         if matches!(self.stage, Stage::Extracting | Stage::Configuring) {
-            if let Ok(dir) = paths::instance_dir(&self.name, &self.version) {
+            if let Ok(dir) = paths::instance_dir(&self.environment_id, &self.name, &self.version) {
                 let _ = std::fs::remove_dir_all(&dir);
             }
-            if let Ok(dir) = paths::component_dir(&self.name) {
+            if let Ok(dir) = paths::component_dir(&self.environment_id, &self.name) {
                 let _ = std::fs::remove_dir(&dir); // 仅在空目录时成功
             }
         }
@@ -242,6 +256,7 @@ mod tests {
 
     fn test_config() -> InstallConfig {
         InstallConfig {
+            environment_id: "00000000-0000-4000-8000-000000000001".into(),
             component: "hadoop".into(),
             version: "3.5.0".into(),
             source_id: "清华源".into(),
@@ -252,10 +267,19 @@ mod tests {
 
     #[test]
     fn install_rejects_unknown_source() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join("solostack-install-source");
+        std::env::set_var("HOME", &tmp);
+        let _ = std::fs::remove_dir_all(&tmp);
         let mut cfg = test_config();
+        let environment = crate::app::environment::create("默认环境").unwrap();
+        cfg.environment_id = environment.id;
         cfg.source_id = "不存在的源".into();
         let cancel = AtomicBool::new(false);
         let err = install(&cfg, None, &cancel);
         assert!(err.is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

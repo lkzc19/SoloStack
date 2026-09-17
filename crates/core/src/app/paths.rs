@@ -1,27 +1,31 @@
 use std::path::{Path, PathBuf};
 
-/// SoloStack 数据根目录名（固定 `~/.solostack`，引导仅确认默认路径）。
+use uuid::Uuid;
+
+/// SoloStack 数据根目录名（固定 `~/.solostack`）。
 pub const ROOT_DIR_NAME: &str = ".solostack";
 
-/// 顶层子目录名。
+/// 应用级目录。
+pub const APP_DIR: &str = "app";
+pub const APP_LOG_DIR: &str = "log";
+pub const CACHE_DIR: &str = "cache";
+pub const DOWNLOADS_DIR: &str = "downloads";
+pub const ENVIRONMENTS_DIR: &str = "environments";
+
+/// 环境目录。
 pub const COMPONENTS_DIR: &str = "components";
 pub const VAR_DIR: &str = "var";
-/// app 自身目录（设置 + 操作日志）。
-pub const APP_DIR: &str = "app";
-/// 历史目录名（配置副本机制已废弃，仅迁移时清理用）。
-const LEGACY_ETC_DIR: &str = "etc";
-
-/// `var/` 下子目录。
 pub const VAR_DATA_DIR: &str = "data";
 pub const VAR_LOG_DIR: &str = "log";
 pub const VAR_RUN_DIR: &str = "run";
-pub const VAR_DOWNLOADS_DIR: &str = "downloads";
 
-/// `app/` 下子目录。
-pub const APP_LOG_DIR: &str = "log";
-
-/// 用户设置文件名（存放于 `app/`）。
+/// 用户设置文件名。
 pub const SETTINGS_FILE: &str = "settings.json";
+/// 环境元数据文件名。
+pub const ENVIRONMENT_FILE: &str = "environment.json";
+
+/// 历史目录名（配置副本机制已废弃，仅迁移时清理用）。
+const LEGACY_ETC_DIR: &str = "etc";
 
 /// SoloStack 数据根目录：`~/.solostack/`。
 pub fn root_dir() -> Result<PathBuf, std::io::Error> {
@@ -30,76 +34,124 @@ pub fn root_dir() -> Result<PathBuf, std::io::Error> {
     Ok(home.join(ROOT_DIR_NAME))
 }
 
-fn join_sub(dir: &str) -> Result<PathBuf, std::io::Error> {
+fn join_root(dir: &str) -> Result<PathBuf, std::io::Error> {
     Ok(root_dir()?.join(dir))
 }
 
-/// 组件实例目录名：`<组件>-<版本>`（多版本共存的物理基础）。
+/// 校验环境 ID，防止把用户可控字符串拼进目录导致路径逃逸。
+pub fn validate_environment_id(id: &str) -> Result<(), std::io::Error> {
+    Uuid::parse_str(id).map(|_| ()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("无效的环境 ID: {id}"),
+        )
+    })
+}
+
+fn checked_environment_dir(id: &str) -> Result<PathBuf, std::io::Error> {
+    validate_environment_id(id)?;
+    Ok(environments_dir()?.join(id))
+}
+
+/// `environments/`：全部环境目录。
+pub fn environments_dir() -> Result<PathBuf, std::io::Error> {
+    join_root(ENVIRONMENTS_DIR)
+}
+
+/// `environments/<environment-id>/`：单个环境根目录。
+pub fn environment_dir(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    checked_environment_dir(environment_id)
+}
+
+/// `environments/<environment-id>/environment.json`。
+pub fn environment_file(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(environment_dir(environment_id)?.join(ENVIRONMENT_FILE))
+}
+
+/// 组件实例目录名：`<组件>-<版本>`。
 pub fn instance_dir_name(component: &str, version: &str) -> String {
     format!("{component}-{version}")
 }
 
-/// `components/`：所有组件解压目录的根。
-pub fn components_dir() -> Result<PathBuf, std::io::Error> {
-    join_sub(COMPONENTS_DIR)
+/// `environments/<id>/components/`。
+pub fn components_dir(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(environment_dir(environment_id)?.join(COMPONENTS_DIR))
 }
 
-/// `components/<component>/`：某组件的各版本父目录。
-pub fn component_dir(component: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(components_dir()?.join(component))
+/// `environments/<id>/components/<component>/`。
+pub fn component_dir(environment_id: &str, component: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(components_dir(environment_id)?.join(component))
 }
 
-/// `components/<component>/<component>-<version>/`：某实例的解压目录。
-pub fn instance_dir(component: &str, version: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(component_dir(component)?.join(instance_dir_name(component, version)))
+/// `environments/<id>/components/<component>/<component>-<version>/`。
+pub fn instance_dir(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+) -> Result<PathBuf, std::io::Error> {
+    Ok(component_dir(environment_id, component)?.join(instance_dir_name(component, version)))
 }
 
-/// `var/`：可变运行时数据根目录。
-pub fn var_dir() -> Result<PathBuf, std::io::Error> {
-    join_sub(VAR_DIR)
+/// `environments/<id>/var/`。
+pub fn var_dir(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(environment_dir(environment_id)?.join(VAR_DIR))
 }
 
-/// `var/data/<component>/<component>-<version>/`：某实例的持久数据目录（HDFS 存储等）。
-pub fn var_data_instance_dir(component: &str, version: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(var_dir()?
+/// `environments/<id>/var/data/<component>/<component>-<version>/`。
+pub fn var_data_instance_dir(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+) -> Result<PathBuf, std::io::Error> {
+    Ok(var_dir(environment_id)?
         .join(VAR_DATA_DIR)
         .join(component)
         .join(instance_dir_name(component, version)))
 }
 
-/// `var/log/<component>/<component>-<version>/`：某实例的运行日志目录。
-pub fn var_log_instance_dir(component: &str, version: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(var_dir()?
+/// `environments/<id>/var/log/<component>/<component>-<version>/`。
+pub fn var_log_instance_dir(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+) -> Result<PathBuf, std::io::Error> {
+    Ok(var_dir(environment_id)?
         .join(VAR_LOG_DIR)
         .join(component)
         .join(instance_dir_name(component, version)))
 }
 
-/// `var/run/<component>-<version>.json`：某实例的进程记录文件。
-pub fn runtime_file(component: &str, version: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(var_run_dir()?.join(format!("{}.json", instance_dir_name(component, version))))
+/// `environments/<id>/var/run/<component>-<version>.json`。
+pub fn runtime_file(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+) -> Result<PathBuf, std::io::Error> {
+    Ok(
+        var_run_dir(environment_id)?
+            .join(format!("{}.json", instance_dir_name(component, version))),
+    )
 }
 
-/// `var/run/`：进程 PID / 状态记录目录。
-pub fn var_run_dir() -> Result<PathBuf, std::io::Error> {
-    Ok(var_dir()?.join(VAR_RUN_DIR))
+/// `environments/<id>/var/run/`。
+pub fn var_run_dir(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    Ok(var_dir(environment_id)?.join(VAR_RUN_DIR))
 }
 
-/// `var/run/<component>/<component>-<version>/`：某实例的进程 pid 目录（Hadoop HADOOP_PID_DIR）。
-pub fn var_run_instance_dir(component: &str, version: &str) -> Result<PathBuf, std::io::Error> {
-    Ok(var_run_dir()?
+/// `environments/<id>/var/run/<component>/<component>-<version>/`。
+pub fn var_run_instance_dir(
+    environment_id: &str,
+    component: &str,
+    version: &str,
+) -> Result<PathBuf, std::io::Error> {
+    Ok(var_run_dir(environment_id)?
         .join(component)
         .join(instance_dir_name(component, version)))
 }
 
-/// `var/downloads/`：安装包下载缓存（为组件服务）。
-pub fn downloads_dir() -> Result<PathBuf, std::io::Error> {
-    Ok(var_dir()?.join(VAR_DOWNLOADS_DIR))
-}
-
-/// `app/`：SoloStack 自身数据目录（设置 + 操作日志）。
+/// `app/`：SoloStack 自身数据目录。
 pub fn app_dir() -> Result<PathBuf, std::io::Error> {
-    join_sub(APP_DIR)
+    join_root(APP_DIR)
 }
 
 /// `app/log/`：SoloStack 自身操作日志目录。
@@ -107,118 +159,136 @@ pub fn app_log_dir() -> Result<PathBuf, std::io::Error> {
     Ok(app_dir()?.join(APP_LOG_DIR))
 }
 
+/// `cache/`：应用级共享缓存。
+pub fn cache_dir() -> Result<PathBuf, std::io::Error> {
+    join_root(CACHE_DIR)
+}
+
+/// `cache/downloads/`：所有环境共享的安装包缓存。
+pub fn downloads_dir() -> Result<PathBuf, std::io::Error> {
+    Ok(cache_dir()?.join(DOWNLOADS_DIR))
+}
+
 /// 设置文件路径：`~/.solostack/app/settings.json`。
 pub fn settings_file() -> Result<PathBuf, std::io::Error> {
     Ok(app_dir()?.join(SETTINGS_FILE))
 }
 
-/// 确保 `~/.solostack/` 下所有顶层目录存在，返回根目录路径。
-pub fn ensure_dirs() -> Result<PathBuf, std::io::Error> {
+/// 创建应用级目录。
+pub fn ensure_app_dirs() -> Result<PathBuf, std::io::Error> {
     let root = root_dir()?;
-    for sub in [COMPONENTS_DIR, VAR_DIR, APP_DIR] {
-        std::fs::create_dir_all(root.join(sub))?;
-    }
-    for sub in [VAR_DATA_DIR, VAR_LOG_DIR, VAR_RUN_DIR, VAR_DOWNLOADS_DIR] {
-        std::fs::create_dir_all(root.join(VAR_DIR).join(sub))?;
+    for dir in [APP_DIR, CACHE_DIR, ENVIRONMENTS_DIR] {
+        std::fs::create_dir_all(root.join(dir))?;
     }
     std::fs::create_dir_all(root.join(APP_DIR).join(APP_LOG_DIR))?;
+    std::fs::create_dir_all(root.join(CACHE_DIR).join(DOWNLOADS_DIR))?;
     Ok(root)
 }
 
-/// 校验 `path` 是否位于 `~/.solostack/` 内，防止路径逃逸。
+/// 创建单个环境的完整目录。
+pub fn ensure_environment_dirs(environment_id: &str) -> Result<PathBuf, std::io::Error> {
+    ensure_app_dirs()?;
+    let root = environment_dir(environment_id)?;
+    for dir in [COMPONENTS_DIR, VAR_DIR] {
+        std::fs::create_dir_all(root.join(dir))?;
+    }
+    for dir in [VAR_DATA_DIR, VAR_LOG_DIR, VAR_RUN_DIR] {
+        std::fs::create_dir_all(root.join(VAR_DIR).join(dir))?;
+    }
+    Ok(root)
+}
+
+/// 兼容旧调用：初始化全部应用级目录。
+pub fn ensure_dirs() -> Result<PathBuf, std::io::Error> {
+    ensure_app_dirs()
+}
+
+/// 校验路径位于整个 SoloStack 根目录内。
 pub fn is_within_root(path: &Path) -> Result<bool, std::io::Error> {
-    // 先拒绝 `..` 组件：`Path::starts_with` 是纯词法比较，
-    // `~/.solostack/var/log/x/../../../../etc/passwd` 仍会通过前缀检查，
-    // 而系统调用层会解析 `..`，于是校验形同虚设。
     if path
         .components()
-        .any(|c| c == std::path::Component::ParentDir)
+        .any(|component| component == std::path::Component::ParentDir)
     {
         return Ok(false);
     }
-    let root = root_dir()?;
-    Ok(path.starts_with(&root))
+    Ok(path.starts_with(root_dir()?))
 }
 
-/// 一次性迁移旧版目录布局（幂等，best-effort）：
+/// 校验路径位于指定环境目录内。
+pub fn is_within_environment(environment_id: &str, path: &Path) -> Result<bool, std::io::Error> {
+    if path
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        return Ok(false);
+    }
+    Ok(path.starts_with(environment_dir(environment_id)?))
+}
+
+/// 迁移旧版应用级布局（幂等）：
+/// - 根/旧位置 settings.json → app/settings.json
+/// - 旧应用日志 → app/log/
+/// - 根 downloads/ 与 var/downloads/ → cache/downloads/
+/// - 清理废弃的 installs / etc / snapshots / .templates
 ///
-/// 旧布局 → 新布局：
-/// - 根 `settings.json` → `app/settings.json`
-/// - `var/solostack/*.log` → `app/log/`
-/// - 根 `downloads/*` → `var/downloads/`
-/// - 删除历史 `installs/`（含 `var/installs/`，临时 install.json 机制已废弃）
-/// - 删除 `etc/`（配置副本机制已废弃，配置改为直接读写组件官方文件）
-/// - 删除 `snapshots/`、`.templates/`（快照与模板文件已废弃）
-///
-/// 已存在的目标不覆盖；尽力而为，失败不阻塞初始化。
+/// 组件、var/data、var/log、var/run 留给环境迁移处理。
 pub fn migrate_legacy_layout() -> Result<(), std::io::Error> {
-    ensure_dirs()?;
+    ensure_app_dirs()?;
     let root = root_dir()?;
 
-    // 根 settings.json → app/settings.json
-    // 历史 bug：save() 曾写到根目录、load() 读 app/，于是真值留在根目录而 app/ 里是个空文件。
-    // 故不仅「目标不存在」时搬，目标为空白时也用根目录的值覆盖（覆盖空白文件不丢信息）。
     let legacy_settings = root.join(SETTINGS_FILE);
     if legacy_settings.is_file() {
         let target = settings_file()?;
         let target_blank = std::fs::read_to_string(&target)
-            .map(|s| s.trim().is_empty())
+            .map(|content| content.trim().is_empty())
             .unwrap_or(true);
         if !target.exists() || target_blank {
             let _ = std::fs::rename(&legacy_settings, &target);
         }
     }
 
-    // var/solostack/*.log → app/log/
     let legacy_app_logs = root.join(VAR_DIR).join("solostack");
     if legacy_app_logs.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&legacy_app_logs) {
-            for e in entries.flatten() {
-                let p = e.path();
-                let name = e.file_name();
-                let dest = app_log_dir()?.join(name);
-                if p.is_file() && !dest.exists() {
-                    let _ = std::fs::rename(&p, dest);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let destination = app_log_dir()?.join(entry.file_name());
+                if path.is_file() && !destination.exists() {
+                    let _ = std::fs::rename(&path, destination);
                 }
             }
         }
         let _ = std::fs::remove_dir_all(&legacy_app_logs);
     }
 
-    // 根 downloads/ → var/downloads/
-    let legacy_downloads = root.join(VAR_DOWNLOADS_DIR);
-    if legacy_downloads.is_dir() {
-        let dest = downloads_dir()?;
-        if let Ok(entries) = std::fs::read_dir(&legacy_downloads) {
-            for e in entries.flatten() {
-                let p = e.path();
-                let target = dest.join(e.file_name());
-                if !target.exists() {
-                    let _ = std::fs::rename(&p, target);
+    for legacy_downloads in [
+        root.join(DOWNLOADS_DIR),
+        root.join(VAR_DIR).join(DOWNLOADS_DIR),
+    ] {
+        if legacy_downloads.is_dir() {
+            let destination = downloads_dir()?;
+            if let Ok(entries) = std::fs::read_dir(&legacy_downloads) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let target = destination.join(entry.file_name());
+                    if !target.exists() {
+                        let _ = std::fs::rename(&path, target);
+                    }
                 }
             }
-        }
-        let _ = std::fs::remove_dir_all(&legacy_downloads);
-    }
-
-    // 删除历史 installs 目录（根/ 与 var/，临时 install.json 机制已废弃，残留即清理）
-    for d in [root.join("installs"), root.join(VAR_DIR).join("installs")] {
-        if d.is_dir() {
-            let _ = std::fs::remove_dir_all(&d);
+            let _ = std::fs::remove_dir_all(&legacy_downloads);
         }
     }
 
-    // 删除废弃的配置副本目录 etc/（配置现已就地写在组件实例内）
-    let legacy_etc = root.join(LEGACY_ETC_DIR);
-    if legacy_etc.is_dir() {
-        let _ = std::fs::remove_dir_all(&legacy_etc);
+    for dir in [root.join("installs"), root.join(VAR_DIR).join("installs")] {
+        if dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
-
-    // 删除废弃目录 snapshots/ 与 .templates/
-    for d in ["snapshots", ".templates"] {
-        let p = root.join(d);
-        if p.is_dir() {
-            let _ = std::fs::remove_dir_all(&p);
+    for legacy in [LEGACY_ETC_DIR, "snapshots", ".templates"] {
+        let path = root.join(legacy);
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
         }
     }
 
@@ -228,6 +298,10 @@ pub fn migrate_legacy_layout() -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn environment_id() -> &'static str {
+        "00000000-0000-4000-8000-000000000001"
+    }
 
     #[test]
     fn root_dir_ends_with_solostack() {
@@ -244,73 +318,50 @@ mod tests {
     }
 
     #[test]
-    fn instance_dir_nests_under_components() {
+    fn environment_instance_paths_are_isolated() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
-        let dir = instance_dir("hadoop", "3.5.0").unwrap();
-        assert_eq!(dir, components_dir().unwrap().join("hadoop/hadoop-3.5.0"));
+        let first = instance_dir(environment_id(), "hadoop", "3.5.0").unwrap();
+        let second =
+            instance_dir("00000000-0000-4000-8000-000000000002", "hadoop", "3.5.0").unwrap();
+        assert_ne!(first, second);
+        assert!(first.starts_with(environment_dir(environment_id()).unwrap()));
     }
 
     #[test]
-    fn new_layout_paths() {
+    fn shared_cache_is_outside_environment() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
-        let root = root_dir().unwrap();
-        assert_eq!(settings_file().unwrap(), root.join("app/settings.json"));
-        assert_eq!(downloads_dir().unwrap(), root.join("var/downloads"));
-        assert_eq!(app_log_dir().unwrap(), root.join("app/log"));
+        let cache = downloads_dir().unwrap();
+        assert_eq!(cache, root_dir().unwrap().join("cache/downloads"));
+        assert!(!cache.starts_with(environment_dir(environment_id()).unwrap()));
     }
 
     #[test]
-    fn var_nests_by_component_instance() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let root = root_dir().unwrap();
-
-        let data = var_data_instance_dir("hadoop", "3.5.0").unwrap();
-        assert_eq!(data, root.join("var/data/hadoop/hadoop-3.5.0"));
-
-        let log = var_log_instance_dir("hadoop", "3.5.0").unwrap();
-        assert_eq!(log, root.join("var/log/hadoop/hadoop-3.5.0"));
+    fn invalid_environment_id_is_rejected() {
+        assert!(environment_dir("../../etc").is_err());
+        assert!(environment_dir("hadoop").is_err());
     }
 
     #[test]
-    fn runtime_file_uses_instance_name() {
+    fn ensure_environment_dirs_creates_expected_layout() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
-        let f = runtime_file("hadoop", "3.5.0").unwrap();
-        assert_eq!(f, var_run_dir().unwrap().join("hadoop-3.5.0.json"));
-    }
-
-    #[test]
-    fn ensure_dirs_creates_all_top_level() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("solostack-paths-test");
+        let tmp = std::env::temp_dir().join("solostack-paths-environment");
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let root = ensure_dirs().unwrap();
-        for sub in [COMPONENTS_DIR, VAR_DIR, APP_DIR] {
-            assert!(root.join(sub).is_dir(), "{sub} 未创建");
+        let root = ensure_environment_dirs(environment_id()).unwrap();
+        for dir in ["components", "var/data", "var/log", "var/run"] {
+            assert!(root.join(dir).is_dir(), "{dir} 未创建");
         }
-        assert!(
-            !root.join(LEGACY_ETC_DIR).exists(),
-            "不应再创建已废弃的 etc/"
-        );
-        for sub in [VAR_DATA_DIR, VAR_LOG_DIR, VAR_RUN_DIR, VAR_DOWNLOADS_DIR] {
-            assert!(root.join(VAR_DIR).join(sub).is_dir(), "var/{sub} 未创建");
-        }
-        assert!(
-            root.join(APP_DIR).join(APP_LOG_DIR).is_dir(),
-            "app/log 未创建"
-        );
+        assert!(downloads_dir().unwrap().is_dir());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn migrate_moves_legacy_layout() {
+    fn migrate_moves_legacy_app_layout() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join("solostack-migrate-test");
@@ -318,105 +369,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let root = tmp.join(ROOT_DIR_NAME);
 
-        // 造旧布局
         std::fs::create_dir_all(root.join("downloads")).unwrap();
-        std::fs::create_dir_all(root.join("installs")).unwrap();
-        std::fs::create_dir_all(root.join("var/installs")).unwrap();
-        std::fs::create_dir_all(root.join("etc/hadoop/hadoop-3.5.0")).unwrap();
-        std::fs::create_dir_all(root.join("snapshots")).unwrap();
-        std::fs::create_dir_all(root.join(".templates")).unwrap();
+        std::fs::create_dir_all(root.join("var/downloads")).unwrap();
         std::fs::create_dir_all(root.join("var/solostack")).unwrap();
+        std::fs::create_dir_all(root.join("installs")).unwrap();
+        std::fs::create_dir_all(root.join("etc/hadoop/hadoop-3.5.0")).unwrap();
         std::fs::write(root.join("settings.json"), "{}").unwrap();
-        std::fs::write(root.join("downloads/a.tgz"), "x").unwrap();
-        std::fs::write(root.join("installs/hadoop-AB12-install.json"), "x").unwrap();
-        std::fs::write(root.join("var/installs/kafka-CD34-install.json"), "x").unwrap();
-        std::fs::write(root.join("etc/hadoop/hadoop-3.5.0/.detect-ports"), "9870").unwrap();
-        std::fs::write(root.join("var/solostack/solostack-2026-01-01.log"), "x").unwrap();
-        std::fs::write(root.join("snapshots/s.txt"), "x").unwrap();
-        std::fs::write(root.join(".templates/hadoop.json"), "{}").unwrap();
+        std::fs::write(root.join("downloads/a.tgz"), "a").unwrap();
+        std::fs::write(root.join("var/downloads/b.tgz"), "b").unwrap();
+        std::fs::write(root.join("var/solostack/solostack.log"), "log").unwrap();
 
         migrate_legacy_layout().unwrap();
 
-        assert!(settings_file().unwrap().is_file(), "settings 应迁到 app/");
-        assert!(!root.join("settings.json").exists());
-        assert!(
-            downloads_dir().unwrap().join("a.tgz").is_file(),
-            "downloads 应迁到 var/"
-        );
-        assert!(!root.join("downloads").exists());
-        assert!(!root.join("installs").exists(), "根 installs 应清理");
-        assert!(!root.join("var/installs").exists(), "var/installs 应清理");
-        assert!(
-            !root.join(LEGACY_ETC_DIR).exists(),
-            "配置副本 etc/（含 .detect-ports）应整块清理"
-        );
-        assert!(
-            app_log_dir()
-                .unwrap()
-                .join("solostack-2026-01-01.log")
-                .is_file(),
-            "日志应迁到 app/log"
-        );
-        assert!(!root.join("var/solostack").exists());
-        assert!(!root.join("snapshots").exists());
-        assert!(!root.join(".templates").exists());
-
-        // 幂等：再跑一次不报错、不重复
-        migrate_legacy_layout().unwrap();
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    /// 复现历史 bug 的现场：真值留在根 settings.json，app/ 下是个空文件。
-    /// 迁移必须把真值救到 app/（否则用户的偏好永久失效）。
-    #[test]
-    fn migrate_rescues_settings_when_app_copy_is_blank() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("solostack-migrate-settings-test");
-        std::env::set_var("HOME", &tmp);
-        let _ = std::fs::remove_dir_all(&tmp);
-
-        std::fs::create_dir_all(app_dir().unwrap()).unwrap();
-        std::fs::write(app_dir().unwrap().join(SETTINGS_FILE), "").unwrap();
-        std::fs::write(
-            root_dir().unwrap().join(SETTINGS_FILE),
-            r#"{"log_viewer":"com.sublimetext.4"}"#,
-        )
-        .unwrap();
+        assert!(settings_file().unwrap().is_file());
+        assert!(downloads_dir().unwrap().join("a.tgz").is_file());
+        assert!(downloads_dir().unwrap().join("b.tgz").is_file());
+        assert!(app_log_dir().unwrap().join("solostack.log").is_file());
+        assert!(!root.join("etc").exists());
+        assert!(!root.join("installs").exists());
 
         migrate_legacy_layout().unwrap();
-
-        let content = std::fs::read_to_string(settings_file().unwrap()).unwrap();
-        assert!(content.contains("com.sublimetext.4"), "真值应被救到 app/");
-        assert!(!root_dir().unwrap().join(SETTINGS_FILE).exists());
-
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn is_within_root_detects_escape() {
+    fn is_within_environment_rejects_escape() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
-        let inside = instance_dir("hadoop", "3.5.0").unwrap();
-        assert!(is_within_root(&inside).unwrap());
+        let inside = instance_dir(environment_id(), "hadoop", "3.5.0").unwrap();
+        assert!(is_within_environment(environment_id(), &inside).unwrap());
 
         let outside = std::env::temp_dir();
-        assert!(!is_within_root(&outside).unwrap());
-    }
-
-    #[test]
-    fn root_dir_is_fixed_home_solostack() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("solostack-root-test");
-        std::env::set_var("HOME", &tmp);
-        let _ = std::fs::remove_dir_all(&tmp);
-
-        assert_eq!(root_dir().unwrap(), tmp.join(ROOT_DIR_NAME));
-        // 首次初始化以 `app/settings.json` 是否存在为准（migrate / settings 依赖该约定）
-        assert!(!settings_file().unwrap().exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(!is_within_environment(environment_id(), &outside).unwrap());
     }
 }

@@ -85,11 +85,20 @@ pub fn set_close_to_tray(close_to_tray: bool) -> Result<(), String> {
 ///
 /// 所选应用不可用（如已卸载）时，自动降级为系统默认应用打开（`open <path>`）。
 #[tauri::command]
-pub fn open_log_file(component: String, path: String) -> Result<(), String> {
-    let i = resolve(&component)?;
-    let path = logs::validated_log_file(&i.name, &i.version, std::path::Path::new(&path))?
-        .display()
-        .to_string();
+pub fn open_log_file(
+    environment_id: String,
+    component: String,
+    path: String,
+) -> Result<(), String> {
+    let i = resolve(&environment_id, &component)?;
+    let path = logs::validated_log_file(
+        &i.environment_id,
+        &i.name,
+        &i.version,
+        std::path::Path::new(&path),
+    )?
+    .display()
+    .to_string();
     let settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     if !settings.log.viewer.is_empty() {
         let ok = std::process::Command::new("open")

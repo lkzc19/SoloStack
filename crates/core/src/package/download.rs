@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -9,6 +10,11 @@ use crate::app::paths;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+fn cache_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 /// 下载进度回调（接收已下载字节数 + 总字节数，total 可能为 0 表示未知）。
 pub type ProgressFn = Box<dyn FnMut(u64, u64)>;
@@ -24,7 +30,7 @@ pub fn target_path(url: &str) -> Result<PathBuf, String> {
     Ok(downloads_dir.join(file_name))
 }
 
-/// 下载单个文件到下载缓存目录（`data_root/downloads/`）。
+/// 下载单个文件到共享缓存目录（`~/.solostack/cache/downloads/`）。
 ///
 /// - `url`：完整下载地址（由下载源文件 + 组件 + 版本解析）
 /// - `expected_sha256`：manifest 固定的 SHA256
@@ -39,6 +45,7 @@ pub fn download(
     mut progress: Option<ProgressFn>,
     cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
+    let _guard = wait_for_cache_lock(cancel)?;
     validate_expected_sha256(expected_sha256)?;
     let target = target_path(url)?;
     if let Some(parent) = target.parent() {
@@ -126,6 +133,18 @@ pub fn download(
     })?;
 
     Ok(target)
+}
+
+fn wait_for_cache_lock(cancel: &AtomicBool) -> Result<MutexGuard<'static, ()>, String> {
+    loop {
+        if let Ok(guard) = cache_lock().try_lock() {
+            return Ok(guard);
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return Err("安装已取消".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// 下载中的半成品路径：`<同名>.part`（与最终文件同目录，便于 rename）。

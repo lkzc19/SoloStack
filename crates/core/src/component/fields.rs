@@ -15,16 +15,16 @@ pub fn supports_jdk(comp: &dyn Component) -> bool {
 }
 
 /// 构造通用 `jdk_version` 的当前值。
-pub fn jdk_field(comp: &dyn Component, version: &str) -> ConfigFieldValue {
+pub fn jdk_field(environment_id: &str, comp: &dyn Component, version: &str) -> ConfigFieldValue {
     ConfigFieldValue {
         id: "jdk_version".into(),
-        value: jdk_value(comp, version),
+        value: jdk_value(environment_id, comp, version),
     }
 }
 
 /// 读当前 JDK 目录名：从组件环境文件的 JAVA_HOME 反查本机 JDK 扫描结果。
-fn jdk_value(comp: &dyn Component, version: &str) -> String {
-    let Some(home) = read_java_home(comp, version) else {
+fn jdk_value(environment_id: &str, comp: &dyn Component, version: &str) -> String {
+    let Some(home) = read_java_home(environment_id, comp, version) else {
         return String::new();
     };
     jdk::scan()
@@ -35,9 +35,13 @@ fn jdk_value(comp: &dyn Component, version: &str) -> String {
 }
 
 /// 精确读组件环境文件里的 JAVA_HOME（组件无可落盘环境文件时返回 None）。
-pub(crate) fn read_java_home(comp: &dyn Component, version: &str) -> Option<String> {
+pub(crate) fn read_java_home(
+    environment_id: &str,
+    comp: &dyn Component,
+    version: &str,
+) -> Option<String> {
     let file = comp.java_env_file()?;
-    let f = super::open_config(comp.component(), version, file).ok()?;
+    let f = super::open_config(environment_id, comp.component(), version, file).ok()?;
     let home = f.get("JAVA_HOME").ok().flatten()?;
     let home = home.trim().to_string();
     if home.is_empty() {

@@ -10,8 +10,18 @@ use crate::app::paths;
 pub struct Settings {
     /// 点击关闭按钮时是否仅隐藏窗口并保留托盘进程。
     pub close_to_tray: bool,
+    /// 环境相关设置。
+    pub environment: EnvironmentSettings,
     /// 应用诊断日志配置。
     pub log: LogSettings,
+}
+
+/// 环境设置。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvironmentSettings {
+    /// 当前活动环境 ID。首次初始化前可以为空。
+    #[serde(default)]
+    pub active_id: Option<String>,
 }
 
 /// 日志查看与持久化配置。
@@ -46,6 +56,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             close_to_tray: default_close_to_tray(),
+            environment: EnvironmentSettings::default(),
             log: LogSettings::default(),
         }
     }
@@ -56,6 +67,8 @@ impl Default for Settings {
 struct SettingsWire {
     #[serde(default = "default_close_to_tray")]
     close_to_tray: bool,
+    #[serde(default)]
+    environment: Option<EnvironmentSettings>,
     #[serde(default)]
     log: Option<LogSettings>,
     #[serde(default)]
@@ -95,6 +108,7 @@ impl<'de> Deserialize<'de> for Settings {
 
         Ok(Self {
             close_to_tray: wire.close_to_tray,
+            environment: wire.environment.unwrap_or_default(),
             log,
         })
     }
@@ -173,6 +187,9 @@ mod tests {
 
         let s = Settings {
             close_to_tray: false,
+            environment: EnvironmentSettings {
+                active_id: Some("environment-id".to_string()),
+            },
             log: LogSettings {
                 viewer: "com.sublimetext.4".into(),
                 level: "debug".into(),
