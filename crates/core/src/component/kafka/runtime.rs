@@ -74,8 +74,8 @@ fn format_storage_if_needed(version: &str) -> Result<(), String> {
 
     let conf = component::config_path(NAME, version, F_PROPS)?;
     println!("首次使用，格式化 Kafka KRaft 存储...");
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "init.kafka.format",
         &format!("首次启动 {NAME} v{version}，格式化 KRaft 存储目录"),
     );
 

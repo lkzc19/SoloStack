@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::app::paths;
@@ -32,12 +34,31 @@ pub fn list_log_files(name: &str, version: &str) -> Result<Vec<PathBuf>, String>
 
 /// 读取文件末尾 `lines` 行文本（日志 tail）。
 pub fn tail(path: &std::path::Path, lines: usize) -> Result<String, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("读取日志 {} 失败: {e}", path.display()))?;
     let line_count = lines.max(1);
-    let tail: Vec<&str> = content.lines().rev().take(line_count).collect();
-    let mut out = tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
-    if !content.ends_with('\n') {
+    let ends_with_newline = std::fs::File::open(path)
+        .and_then(|mut file| {
+            let len = file.metadata()?.len();
+            if len == 0 {
+                return Ok(false);
+            }
+            file.seek(SeekFrom::End(-1))?;
+            let mut byte = [0u8; 1];
+            file.read_exact(&mut byte)?;
+            Ok(byte[0] == b'\n')
+        })
+        .unwrap_or(false);
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("读取日志 {} 失败: {e}", path.display()))?;
+    let mut tail = VecDeque::with_capacity(line_count);
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|e| format!("读取日志 {} 失败: {e}", path.display()))?;
+        if tail.len() == line_count {
+            tail.pop_front();
+        }
+        tail.push_back(line);
+    }
+    let mut out = tail.into_iter().collect::<Vec<_>>().join("\n");
+    if !ends_with_newline && !out.is_empty() {
         out.push('\n');
     }
     Ok(out)

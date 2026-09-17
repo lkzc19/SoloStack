@@ -12,24 +12,36 @@ pub enum Status {
 
 /// 启动组件：配置就绪后由组件自己的启停序列执行。
 pub fn start(name: &str, version: &str) -> Result<(), String> {
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let operation = crate::app::app_log::Operation::begin(
+        "start",
+        name,
+        version,
         &format!("启动组件 {name} v{version}"),
     );
-    component::prepare_config(name, version)?;
-    let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
-    c.init(version)?;
-    c.start(version)
+    let result = (|| {
+        component::prepare_config(name, version)?;
+        let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
+        c.init(version)?;
+        c.start(version)
+    })();
+    operation.finish(&result);
+    result
 }
 
 /// 停止组件。
 pub fn stop(name: &str, version: &str) -> Result<(), String> {
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let operation = crate::app::app_log::Operation::begin(
+        "stop",
+        name,
+        version,
         &format!("停止组件 {name} v{version}"),
     );
-    let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
-    c.stop(version)
+    let result = (|| {
+        let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
+        c.stop(version)
+    })();
+    operation.finish(&result);
+    result
 }
 
 /// 组件整体运行状态：端口由组件从自己的配置文件**精确读**出，

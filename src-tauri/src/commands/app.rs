@@ -25,9 +25,36 @@ pub fn get_settings() -> Result<SettingsInfo, String> {
     let settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     Ok(SettingsInfo {
         data_root: root.display().to_string(),
-        log_viewer: settings.log_viewer,
+        log_viewer: settings.log.viewer,
         close_to_tray: settings.close_to_tray,
+        log_level: settings.log.level,
+        log_retention_days: settings.log.retention_days,
+        log_max_total_mb: settings.log.max_total_mb,
     })
+}
+
+/// 保存日志级别、保留期限和容量限制。
+#[tauri::command]
+pub fn set_logging_settings(
+    log_level: String,
+    log_retention_days: u32,
+    log_max_total_mb: u64,
+) -> Result<(), String> {
+    if app_log::LogLevel::parse(&log_level).is_none() {
+        return Err(format!("不支持的日志级别: {log_level}"));
+    }
+    if !(1..=365).contains(&log_retention_days) {
+        return Err("日志保留天数必须在 1 到 365 之间".to_string());
+    }
+    if !(10..=10_240).contains(&log_max_total_mb) {
+        return Err("日志总容量必须在 10 MB 到 10 GB 之间".to_string());
+    }
+    let mut settings =
+        solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
+    settings.log.level = log_level.to_ascii_lowercase();
+    settings.log.retention_days = log_retention_days;
+    settings.log.max_total_mb = log_max_total_mb;
+    settings.save().map_err(|e| e.to_string())
 }
 
 /// 白名单里已安装的编辑器（日志查看器候选）。
@@ -41,7 +68,7 @@ pub fn list_apps() -> Vec<app_scan::AppDef> {
 pub fn set_log_viewer(app: String) -> Result<(), String> {
     let mut settings =
         solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
-    settings.log_viewer = app;
+    settings.log.viewer = app;
     settings.save().map_err(|e| e.to_string())
 }
 
@@ -64,9 +91,9 @@ pub fn open_log_file(component: String, path: String) -> Result<(), String> {
         .display()
         .to_string();
     let settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
-    if !settings.log_viewer.is_empty() {
+    if !settings.log.viewer.is_empty() {
         let ok = std::process::Command::new("open")
-            .args(["-b", &settings.log_viewer, &path])
+            .args(["-b", &settings.log.viewer, &path])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -116,6 +143,9 @@ pub struct SettingsInfo {
     data_root: String,
     log_viewer: String,
     close_to_tray: bool,
+    log_level: String,
+    log_retention_days: u32,
+    log_max_total_mb: u64,
 }
 
 /// 本机 JDK（GUI 展示）。

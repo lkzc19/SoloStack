@@ -49,6 +49,40 @@ export interface SettingsInfo {
   data_root: string;
   log_viewer: string;
   close_to_tray: boolean;
+  log_level: string;
+  log_retention_days: number;
+  log_max_total_mb: number;
+}
+
+export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
+export type LogSource =
+  | "app"
+  | "process"
+  | "script_stdout"
+  | "script_stderr"
+  | "component";
+
+export interface LogRecord {
+  timestamp: string;
+  level: LogLevel;
+  source: LogSource;
+  event: string;
+  component?: string;
+  version?: string;
+  operation?: string;
+  task_id?: string;
+  message: string;
+  fields: Record<string, string>;
+}
+
+export interface LogPage {
+  date: string;
+  records: LogRecord[];
+  total: number;
+  truncated: boolean;
+  components: string[];
+  versions: string[];
+  operations: string[];
 }
 
 export interface InstallSource {

@@ -23,6 +23,22 @@ pub fn list_fields(name: &str, version: &str) -> Result<Vec<ConfigFieldValue>, S
 
 /// 一次保存整组字段；JDK 与组件业务字段统一合并后事务落盘。
 pub fn save_fields(name: &str, version: &str, updates: &[ConfigFieldUpdate]) -> Result<(), String> {
+    let operation = crate::app::app_log::Operation::begin(
+        "save-config",
+        name,
+        version,
+        &format!("保存 {name} v{version} 配置"),
+    );
+    let result = save_fields_inner(name, version, updates);
+    operation.finish(&result);
+    result
+}
+
+fn save_fields_inner(
+    name: &str,
+    version: &str,
+    updates: &[ConfigFieldUpdate],
+) -> Result<(), String> {
     let Some(c) = registry::by_component(name) else {
         return Err(format!("组件 {name} 未注册，无法设置配置"));
     };
@@ -57,7 +73,7 @@ pub fn save_fields(name: &str, version: &str, updates: &[ConfigFieldUpdate]) -> 
 
     config::apply_plan(&plan).map_err(|error| {
         let message = format!("保存 {name} v{version} 配置失败: {error}");
-        let _ = crate::app::app_log::append(crate::app::app_log::ERROR, &message);
+        let _ = crate::app::app_log::error("config.save.failed", &message);
         message
     })
 }

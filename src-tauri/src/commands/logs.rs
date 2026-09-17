@@ -1,5 +1,6 @@
 //! 组件日志：列出日志文件、按路径读取尾部。
 
+use solostack_core::app::app_log::{LogPage, LogQuery};
 use solostack_core::lifecycle::logs;
 
 use super::resolve;
@@ -23,4 +24,10 @@ pub fn read_component_log_tail(
     let log_path = std::path::PathBuf::from(&path);
     let log_path = logs::validated_log_file(&i.name, &i.version, &log_path)?;
     logs::tail(&log_path, lines)
+}
+
+/// 查询结构化的 app 操作日志。
+#[tauri::command]
+pub fn query_app_logs(query: LogQuery) -> Result<LogPage, String> {
+    solostack_core::app::app_log::query_logs(query)
 }

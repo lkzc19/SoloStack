@@ -47,6 +47,7 @@ pub fn run() {
             app::get_app_logs,
             app::list_log_dates,
             app::get_settings,
+            app::set_logging_settings,
             app::set_close_to_tray,
             app::list_apps,
             app::set_log_viewer,
@@ -68,7 +69,8 @@ pub fn run() {
             install::delete_download_packages,
             install::uninstall_component,
             logs::list_component_logs,
-            logs::read_component_log_tail
+            logs::read_component_log_tail,
+            logs::query_app_logs
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

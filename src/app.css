@@ -72,6 +72,8 @@
   --red: #ef4444;
   --blue: #3b82f6;
   --line: #e2e8f0;
+  --settings-accordion-header-hover: #f9f9f9;
+  --settings-accordion-content-bg: var(--panel);
   --radius: 10px;
   --shadow-sm: 0 2px 8px rgba(148, 163, 184, 0.18);
   --shadow-md: 0 6px 20px rgba(148, 163, 184, 0.22);
@@ -1025,6 +1027,186 @@ input[type="number"] {
   font-size: 11px;
   line-height: 1.5;
 }
+.settings-accordion-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-accordion {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.settings-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  min-height: 78px;
+  padding: 18px 16px;
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-accordion-header:hover {
+  background: var(--settings-accordion-header-hover);
+}
+.settings-accordion.open .settings-accordion-header {
+  background: var(--settings-accordion-header-hover);
+}
+.settings-accordion-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.settings-accordion-copy .settings-field-desc {
+  margin: 0;
+}
+.settings-accordion-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+.settings-accordion.open .settings-accordion-chevron {
+  transform: rotate(180deg);
+}
+.settings-accordion-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px 14px;
+  background: var(--settings-accordion-content-bg);
+}
+.settings-accordion-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 58px;
+  padding-top: 14px;
+  box-sizing: border-box;
+}
+.settings-accordion-field-row .settings-field-copy {
+  flex: 1;
+}
+.settings-log-level-select {
+  width: 112px;
+  flex-shrink: 0;
+}
+.log-level-help {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--settings-accordion-header-hover);
+}
+.log-level-help-title {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.log-level-help-list {
+  display: grid;
+  gap: 5px;
+}
+.log-level-help-item {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.log-level-help-item code {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.log-level-help-item code.log-level-error {
+  color: var(--red);
+}
+.log-level-help-item code.log-level-warn {
+  color: var(--accent);
+}
+.log-level-help-item code.log-level-info {
+  color: var(--primary-deep);
+}
+.log-level-help-item code.log-level-debug {
+  color: var(--blue);
+}
+.log-level-help-item code.log-level-trace {
+  color: var(--muted);
+}
+.settings-accordion-inline-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.settings-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.settings-inline-label {
+  font-size: 13px;
+  color: var(--text);
+}
+.settings-inline-input,
+.settings-inline-number input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 11px;
+}
+.settings-inline-number {
+  position: relative;
+  display: flex;
+  width: 100%;
+}
+.settings-inline-number input {
+  padding-right: 36px;
+}
+.settings-inline-number > span {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+.settings-accordion-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.settings-field-title {
+  display: block;
+  font-size: 15px;
+  line-height: 1.2;
+  color: var(--heading);
+}
+.settings-field-desc {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
 /* ── 缓存 tab ── */
 .cache-toolbar {
   display: flex;
@@ -1199,6 +1381,8 @@ input[type="number"] {
   --red: #f28484;
   --blue: #97bce3;
   --line: #3f454f;
+  --settings-accordion-header-hover: #343840;
+  --settings-accordion-content-bg: var(--panel);
   --radius: 10px;
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.32);

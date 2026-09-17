@@ -10,6 +10,7 @@
     onSelect,
     class: cls = "",
     align = "start",
+    size = "md",
   }: {
     value?: string;
     items?: Item[];
@@ -17,6 +18,7 @@
     onSelect?: (v: string) => void;
     class?: string;
     align?: "start" | "center" | "end";
+    size?: "xs" | "sm" | "md" | "icon";
   } = $props();
 
   interface Item {
@@ -55,7 +57,7 @@
   <Popover.Trigger>
     <Button
       variant="outline"
-      size="md"
+      {size}
       type="button"
       class={triggerClass}
       bind:ref={triggerRef}

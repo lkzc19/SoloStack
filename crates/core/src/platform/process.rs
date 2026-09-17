@@ -3,13 +3,27 @@
 //! 本模块**不认识组件** —— 需要注入什么环境变量由调用方给出。组件相关的
 //! JAVA_HOME 解析与组件环境变量在 `component::exec` 里组装。
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MAX_OUTPUT_CHARS: usize = 4_000;
+const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+const MAX_PENDING_LINE_BYTES: usize = 4 * 1024;
+
+/// 脚本输出流。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptStream {
+    Stdout,
+    Stderr,
+}
+
+/// 脚本输出的实时观察器。
+pub type ScriptOutputObserver = Arc<dyn Fn(ScriptStream, &str) + Send + Sync>;
 
 /// 脚本执行结果。仅在退出码为 0 时返回。
 #[derive(Debug)]
@@ -208,6 +222,18 @@ pub fn run_script_in(
     envs: &[(&str, &str)],
     timeout: Duration,
 ) -> Result<ScriptOutput, String> {
+    run_script_in_with_observer(dir, script, args, envs, timeout, None)
+}
+
+/// 在脚本执行过程中实时观察 stdout/stderr。
+pub fn run_script_in_with_observer(
+    dir: &Path,
+    script: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    timeout: Duration,
+    observer: Option<ScriptOutputObserver>,
+) -> Result<ScriptOutput, String> {
     let mut command = command_for(dir, script, args, envs)?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -229,8 +255,12 @@ pub fn run_script_in(
         .take()
         .ok_or_else(|| format!("无法捕获脚本错误: {}", dir.join(script).display()))?;
 
-    let stdout = std::thread::spawn(move || read_stream(stdout));
-    let stderr = std::thread::spawn(move || read_stream(stderr));
+    let stdout_observer = observer.clone();
+    let stderr_observer = observer;
+    let stdout =
+        std::thread::spawn(move || read_stream(stdout, ScriptStream::Stdout, stdout_observer));
+    let stderr =
+        std::thread::spawn(move || read_stream(stderr, ScriptStream::Stderr, stderr_observer));
     let started = Instant::now();
 
     loop {
@@ -269,10 +299,58 @@ pub fn run_script_in(
     }
 }
 
-fn read_stream(mut stream: impl Read) -> std::io::Result<String> {
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+fn read_stream(
+    mut stream: impl Read,
+    kind: ScriptStream,
+    observer: Option<ScriptOutputObserver>,
+) -> std::io::Result<String> {
+    let mut chunk = [0u8; 8192];
+    let mut captured = VecDeque::with_capacity(8192);
+    let mut pending = Vec::new();
+    let mut captured_truncated = false;
+
+    loop {
+        let count = stream.read(&mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        captured.extend(&chunk[..count]);
+        while captured.len() > MAX_CAPTURE_BYTES {
+            captured.pop_front();
+            captured_truncated = true;
+        }
+        pending.extend_from_slice(&chunk[..count]);
+
+        while let Some(position) = pending.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = pending.drain(..=position).collect();
+            notify_output(kind, &line, observer.as_ref());
+        }
+        while pending.len() > MAX_PENDING_LINE_BYTES {
+            let part: Vec<u8> = pending.drain(..MAX_PENDING_LINE_BYTES).collect();
+            notify_output(kind, &part, observer.as_ref());
+        }
+    }
+    if !pending.is_empty() {
+        notify_output(kind, &pending, observer.as_ref());
+    }
+
+    let captured: Vec<u8> = captured.into_iter().collect();
+    let mut output = String::from_utf8_lossy(&captured).into_owned();
+    if captured_truncated {
+        output.insert_str(0, "...[捕获输出超限，已保留末尾内容]\n");
+    }
+    Ok(output)
+}
+
+fn notify_output(kind: ScriptStream, bytes: &[u8], observer: Option<&ScriptOutputObserver>) {
+    let Some(observer) = observer else {
+        return;
+    };
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.trim_end_matches(['\r', '\n']);
+    if !text.is_empty() {
+        observer(kind, text);
+    }
 }
 
 fn join_output(handle: std::thread::JoinHandle<std::io::Result<String>>) -> String {
@@ -378,6 +456,7 @@ fn command_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn port_open_false_when_closed() {
@@ -425,6 +504,64 @@ mod tests {
         assert_eq!(output.stderr, "warn\n");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_observer_receives_stdout_and_stderr_lines() {
+        let dir = script_dir("observer");
+        std::fs::write(
+            dir.join("test.sh"),
+            "printf 'out-1\\nout-2\\n'\nprintf 'err-1\\n' >&2\n",
+        )
+        .unwrap();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observed);
+        let observer: ScriptOutputObserver = Arc::new(move |stream, text| {
+            sink.lock().unwrap().push((stream, text.to_string()));
+        });
+
+        run_script_in_with_observer(
+            &dir,
+            "test.sh",
+            &[],
+            &[],
+            Duration::from_secs(1),
+            Some(observer),
+        )
+        .unwrap();
+
+        let observed = observed.lock().unwrap();
+        assert!(observed
+            .iter()
+            .any(|(stream, text)| *stream == ScriptStream::Stdout && text == "out-1"));
+        assert!(observed
+            .iter()
+            .any(|(stream, text)| *stream == ScriptStream::Stdout && text == "out-2"));
+        assert!(observed
+            .iter()
+            .any(|(stream, text)| *stream == ScriptStream::Stderr && text == "err-1"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_output_without_newlines_is_split_for_observer() {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observed);
+        let observer: ScriptOutputObserver = Arc::new(move |_, text| {
+            sink.lock().unwrap().push(text.len());
+        });
+        let input = vec![b'x'; MAX_PENDING_LINE_BYTES * 2 + 1];
+
+        let output = read_stream(
+            std::io::Cursor::new(input),
+            ScriptStream::Stdout,
+            Some(observer),
+        )
+        .unwrap();
+
+        assert_eq!(output.len(), MAX_PENDING_LINE_BYTES * 2 + 1);
+        assert_eq!(observed.lock().unwrap().len(), 3);
     }
 
     #[test]

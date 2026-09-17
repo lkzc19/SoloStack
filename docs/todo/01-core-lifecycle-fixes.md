@@ -1,12 +1,13 @@
-# SoloStack 核心生命周期修复 TODO
+# 01 SoloStack 核心生命周期修复 TODO
 
 > 分支：`fix/core-lifecycle-hardening`
 > 基线：`dab118c`
 > 更新时间：2026-09-14
 > 目标：修复当前模型下的进程调用、配置提交、下载安全和状态判定问题。
 > 原则：保持现有分层与「官方配置即事实源」设计，不引入新的组件特例分支。
-> 范围约束：多环境模型不进入本分支，单独记录在 `docs/Future-Environment-Model-Todo.md`。
-> 范围约束：日志体系在下一版本处理，单独记录在 `docs/Future-Logging-System-Todo.md`。
+> 范围约束：多环境模型不进入本分支，单独记录在 `docs/todo/03-multi-environment-model.md`。
+> 范围约束：结构化日志实施记录在 `docs/todo/02-structured-logging.md`。
+> 范围约束：实时任务日志流在下一版本处理，单独记录在 `docs/todo/04-realtime-task-log-stream.md`。
 
 ---
 

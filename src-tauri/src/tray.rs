@@ -104,7 +104,7 @@ fn hide_main_window_result<R: Runtime>(app: &AppHandle<R>) -> Result<(), String>
 
 fn report_tray_error(message: &str) {
     eprintln!("{message}");
-    let _ = solostack_core::app::app_log::append(solostack_core::app::app_log::ERROR, message);
+    let _ = solostack_core::app::app_log::error("tray.error", message);
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type Update } from "@tauri-apps/plugin-updater";
   import { Folder } from "lucide-svelte";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { Popover } from "bits-ui";
   import {
     AppWindow,
@@ -21,17 +21,22 @@
   import Button from "$lib/components/ui/button/button.svelte";
   import DatePicker from "$lib/components/date-picker.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
+  import Select from "$lib/components/ui/select/select.svelte";
   import Switch from "$lib/components/ui/switch/switch.svelte";
   import { store, flashSuccess, fmtBytes, themeState, setThemeMode } from "$lib/stores.svelte.ts";
   import type { AppDef, DownloadPackageInfo, SettingsInfo } from "$lib/types";
 
   let settingsInfo = $state<SettingsInfo | null>(null);
-  let settingsTab = $state<"general" | "logs" | "cache" | "about">("general");
+  let settingsTab = $state<"general" | "logs" | "cache" | "advanced" | "about">("general");
   let appLogs = $state("");
   let appLogsBusy = $state(false);
   let logDates = $state<string[]>([]);
   let selectedLogDate = $state("");
   let appLogRefresh = $state(0);
+  let loggingLevel = $state("info");
+  let logRetentionDays = $state(7);
+  let logMaxTotalMb = $state(1024);
+  let openAdvancedSection = $state<string | null>(null);
   let cachePackages = $state<DownloadPackageInfo[]>([]);
   let cacheSelected = $state<Set<string>>(new Set());
   let cacheBusy = $state(false);
@@ -69,6 +74,13 @@
   const refreshLabel = $derived(
     refreshItems.find((i) => Number(i.value) === appLogRefresh)?.label ?? "不刷新"
   );
+  const logLevelItems = [
+    { value: "error", label: "ERROR" },
+    { value: "warn", label: "WARN" },
+    { value: "info", label: "INFO" },
+    { value: "debug", label: "DEBUG" },
+    { value: "trace", label: "TRACE" },
+  ];
 
 
   onMount(() => {
@@ -84,6 +96,9 @@
       settingsInfo = await invoke<SettingsInfo>("get_settings");
       logViewer = settingsInfo.log_viewer;
       closeToTray = settingsInfo.close_to_tray;
+      loggingLevel = settingsInfo.log_level;
+      logRetentionDays = settingsInfo.log_retention_days;
+      logMaxTotalMb = settingsInfo.log_max_total_mb;
       await loadApps();
     } catch (e) {
       store.errorMsg = String(e);
@@ -120,13 +135,14 @@
     }
   }
 
-  function switchSettingsTab(t: "general" | "logs" | "cache" | "about") {
+  function switchSettingsTab(t: "general" | "logs" | "cache" | "advanced" | "about") {
     settingsTab = t;
-    if (t === "logs") {
-      loadLogDates();
-      loadAppLogs();
-    }
     if (t === "cache") loadCache();
+  }
+
+  async function loadLogsView() {
+    await loadLogDates();
+    await loadAppLogs();
   }
 
   async function loadLogDates() {
@@ -161,6 +177,14 @@
     if (appLogRefresh <= 0) return;
     const timer = setInterval(loadAppLogs, appLogRefresh * 1000);
     return () => clearInterval(timer);
+  });
+
+  $effect(() => {
+    if (settingsTab === "logs") {
+      untrack(() => {
+        void loadLogsView();
+      });
+    }
   });
 
   let logBox = $state<HTMLPreElement | undefined>(undefined);
@@ -213,6 +237,23 @@
     } catch {
       store.errorMsg = "无法打开下载目录";
     }
+  }
+
+  async function saveLoggingSettings() {
+    try {
+      await invoke("set_logging_settings", {
+        logLevel: loggingLevel,
+        logRetentionDays,
+        logMaxTotalMb,
+      });
+      flashSuccess("日志设置已更新");
+    } catch (e) {
+      store.errorMsg = String(e);
+    }
+  }
+
+  function toggleAdvancedSection(section: string) {
+    openAdvancedSection = openAdvancedSection === section ? null : section;
   }
 
   async function checkForUpdate() {
@@ -296,6 +337,7 @@
     <div class="settings-tabs">
       <button
         class="settings-tab"
+        type="button"
         class:active={settingsTab === "general"}
         onclick={() => switchSettingsTab("general")}
       >
@@ -303,6 +345,7 @@
       </button>
       <button
         class="settings-tab"
+        type="button"
         class:active={settingsTab === "logs"}
         onclick={() => switchSettingsTab("logs")}
       >
@@ -310,6 +353,7 @@
       </button>
       <button
         class="settings-tab"
+        type="button"
         class:active={settingsTab === "cache"}
         onclick={() => switchSettingsTab("cache")}
       >
@@ -317,6 +361,15 @@
       </button>
       <button
         class="settings-tab"
+        type="button"
+        class:active={settingsTab === "advanced"}
+        onclick={() => switchSettingsTab("advanced")}
+      >
+        高级
+      </button>
+      <button
+        class="settings-tab"
+        type="button"
         class:active={settingsTab === "about"}
         onclick={() => switchSettingsTab("about")}
       >
@@ -463,7 +516,7 @@
             </Popover.Content>
           </Popover.Root>
         </div>
-        <pre class="log-box mono" bind:this={logBox}>{appLogs || "暂无日志"}</pre>
+        <pre class="log-box mono" bind:this={logBox}>{appLogs || (appLogsBusy ? "正在读取日志…" : "暂无日志")}</pre>
       </section>
     {:else if settingsTab === "cache"}
       <section class="settings-section">
@@ -505,6 +558,99 @@
             {/each}
           </div>
         {/if}
+      </section>
+    {:else if settingsTab === "advanced"}
+      <section class="settings-section">
+        <div class="settings-accordion-list">
+          <div
+            class="settings-accordion"
+            class:open={openAdvancedSection === "logging"}
+          >
+            <button
+              class="settings-accordion-header"
+              type="button"
+              aria-expanded={openAdvancedSection === "logging"}
+              onclick={() => toggleAdvancedSection("logging")}
+            >
+              <span class="settings-accordion-copy">
+                <span class="settings-field-title">应用诊断日志</span>
+                <span class="settings-field-desc">设置日志记录级别、保留期限和容量限制。</span>
+              </span>
+              <ChevronDown size={16} class="settings-accordion-chevron" />
+            </button>
+            {#if openAdvancedSection === "logging"}
+              <div class="settings-accordion-content">
+                <div class="settings-accordion-field-row">
+                  <div class="settings-field-copy">
+                    <div class="settings-accordion-label">日志级别</div>
+                    <p class="settings-field-desc">设置输出的最低日志级别</p>
+                  </div>
+                  <Select
+                    value={loggingLevel}
+                    items={logLevelItems}
+                    class="settings-log-level-select"
+                    size="sm"
+                    onSelect={(value) => {
+                      loggingLevel = value;
+                      saveLoggingSettings();
+                    }}
+                  />
+                </div>
+                <div class="log-level-help">
+                  <div class="log-level-help-title">日志级别说明：</div>
+                  <div class="log-level-help-list">
+                    <div class="log-level-help-item">
+                      <code class="log-level-error">ERROR</code>
+                      <span>仅记录操作失败、脚本失败等严重错误</span>
+                    </div>
+                    <div class="log-level-help-item">
+                      <code class="log-level-warn">WARN</code>
+                      <span>记录错误、脚本 stderr、取消操作和可恢复异常</span>
+                    </div>
+                    <div class="log-level-help-item">
+                      <code class="log-level-info">INFO</code>
+                      <span>记录安装、启停、卸载等一般操作信息（发布版默认）</span>
+                    </div>
+                    <div class="log-level-help-item">
+                      <code class="log-level-debug">DEBUG</code>
+                      <span>记录脚本命令、stdout 和执行细节（开发版默认）</span>
+                    </div>
+                    <div class="log-level-help-item">
+                      <code class="log-level-trace">TRACE</code>
+                      <span>预留的最详细级别，目前没有业务代码主动写入</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="settings-accordion-inline-fields">
+                  <label class="settings-inline-field">
+                    <span class="settings-inline-label">保留天数</span>
+                    <input
+                      class="settings-inline-input"
+                      type="number"
+                      min="1"
+                      max="365"
+                      bind:value={logRetentionDays}
+                      onchange={saveLoggingSettings}
+                    />
+                  </label>
+                  <label class="settings-inline-field">
+                    <span class="settings-inline-label">总容量上限</span>
+                    <span class="settings-inline-number">
+                      <input
+                        type="number"
+                        min="10"
+                        max="10240"
+                        bind:value={logMaxTotalMb}
+                        onchange={saveLoggingSettings}
+                      />
+                      <span>MB</span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
       </section>
     {:else}
       <section class="about-section">

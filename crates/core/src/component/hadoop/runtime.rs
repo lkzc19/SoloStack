@@ -143,8 +143,8 @@ fn format_namenode_if_needed(version: &str) -> Result<(), String> {
         ));
     }
     println!("首次使用，格式化 NameNode...");
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "init.hadoop.format",
         &format!("首次启动 {NAME} v{version}，格式化 NameNode"),
     );
 

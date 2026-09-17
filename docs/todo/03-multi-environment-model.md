@@ -1,4 +1,4 @@
-# SoloStack 多环境模型后续 TODO
+# 03 SoloStack 多环境模型后续 TODO
 
 > 状态：后续规划，不进入 `fix/core-lifecycle-hardening` 或当前版本。
 > 创建时间：2026-09-14

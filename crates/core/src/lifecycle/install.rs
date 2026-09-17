@@ -33,6 +33,25 @@ pub fn install(
     progress: Option<InstallProgress>,
     cancel: &AtomicBool,
 ) -> Result<std::path::PathBuf, String> {
+    let operation = crate::app::app_log::Operation::begin(
+        "install",
+        &config.component,
+        &config.version,
+        &format!(
+            "开始安装 {} v{}（源：{}）",
+            config.component, config.version, config.source_id
+        ),
+    );
+    let result = install_inner(config, progress, cancel);
+    operation.finish(&result);
+    result
+}
+
+fn install_inner(
+    config: &InstallConfig,
+    progress: Option<InstallProgress>,
+    cancel: &AtomicBool,
+) -> Result<std::path::PathBuf, String> {
     let name = &config.component;
     let version = &config.version;
 
@@ -41,10 +60,6 @@ pub fn install(
 
     // 1. 组件必须已注册；下载/解压/生成任一失败都会由守卫清理已建产物
     registry::by_component(name).ok_or_else(|| format!("组件 {name} 未注册"))?;
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
-        &format!("开始安装 {name} v{version}（源：{}）", config.source_id),
-    );
 
     // 清理守卫：安装未正常完成（报错 / 取消）时删除本次已建实例目录与配置副本
     let mut guard = InstallGuard {
@@ -58,8 +73,8 @@ pub fn install(
     let artifact = crate::package::manifest::resolve_artifact(name, &config.source_id, version)?;
     let cached = download::target_path(&artifact.url)?.exists();
     emit(&shared, ProgressEvent::Checking(cached));
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "install.download.begin",
         &format!(
             "{name} v{version} {}",
             if cached {
@@ -82,22 +97,30 @@ pub fn install(
     let archive = match download::download(&artifact.url, &artifact.sha256, dl_progress, cancel) {
         Ok(a) => a,
         Err(e) => {
-            let _ = crate::app::app_log::append(
-                crate::app::app_log::WARN,
-                &format!("{name} v{version} 安装已取消"),
-            );
+            let cancelled = cancel.load(Ordering::SeqCst) || e.contains("取消");
+            let _ = if cancelled {
+                crate::app::app_log::warn(
+                    "install.cancelled",
+                    &format!("{name} v{version} 安装已取消"),
+                )
+            } else {
+                crate::app::app_log::error(
+                    "install.download.failed",
+                    &format!("{name} v{version} 下载失败: {e}"),
+                )
+            };
             return Err(e);
         }
     };
     if cancel.load(Ordering::SeqCst) {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::WARN,
+        let _ = crate::app::app_log::warn(
+            "install.cancelled",
             &format!("{name} v{version} 安装已取消"),
         );
         return Err("安装已取消".to_string());
     }
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "install.download.done",
         &format!("{name} v{version} 下载完成"),
     );
 
@@ -106,14 +129,14 @@ pub fn install(
     emit(&shared, ProgressEvent::Extracting);
     let instance = paths::instance_dir(name, version).map_err(|e| e.to_string())?;
     extract::extract_tar_gz(&archive, &instance)?;
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "install.extract.done",
         &format!("{name} v{version} 解压完成"),
     );
 
     if cancel.load(Ordering::SeqCst) {
-        let _ = crate::app::app_log::append(
-            crate::app::app_log::WARN,
+        let _ = crate::app::app_log::warn(
+            "install.cancelled",
             &format!("{name} v{version} 安装已取消"),
         );
         return Err("安装已取消".to_string());
@@ -123,18 +146,15 @@ pub fn install(
     guard.stage = Stage::Configuring;
     emit(&shared, ProgressEvent::Configuring);
     apply_install(config)?;
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
+    let _ = crate::app::app_log::info(
+        "install.config.done",
         &format!("{name} v{version} 配置生成完成"),
     );
 
     // 5. 通知完成
     guard.done = true;
     emit(&shared, ProgressEvent::Done);
-    let _ = crate::app::app_log::append(
-        crate::app::app_log::INFO,
-        &format!("{name} v{version} 安装完成"),
-    );
+    let _ = crate::app::app_log::info("install.done", &format!("{name} v{version} 安装完成"));
 
     Ok(instance)
 }
