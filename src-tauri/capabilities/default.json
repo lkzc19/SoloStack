@@ -19,7 +19,9 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "http://localhost:*" },
-        { "url": "https://localhost:*" }
+        { "url": "https://localhost:*" },
+        { "url": "https://github.com/lkzc19/SoloStack" },
+        { "url": "https://github.com/lkzc19/SoloStack/**" }
       ]
     }
   ]
