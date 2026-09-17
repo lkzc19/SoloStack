@@ -1,7 +1,9 @@
 //! 环境管理：创建、重命名、删除、列表与切换。
 
 use solostack_core::app::environment::{self, Environment};
-use solostack_core::lifecycle::{environment as environment_lifecycle, lock};
+use solostack_core::app::environment_usage::{self, EnvironmentUsage};
+use solostack_core::component::registry;
+use solostack_core::lifecycle::{environment as environment_lifecycle, lock, service};
 
 /// 列出全部环境。
 #[tauri::command]
@@ -18,6 +20,20 @@ pub fn list_environments() -> Result<Vec<EnvironmentInfo>, String> {
 pub fn get_active_environment() -> Result<Option<EnvironmentInfo>, String> {
     let active_id = environment::active_id()?;
     Ok(environment::active()?.map(|item| to_info(item, active_id.as_deref())))
+}
+
+/// 环境页概览：组件身份、运行状态和分类磁盘占用。
+#[tauri::command]
+pub async fn list_environment_overviews() -> Result<Vec<EnvironmentOverview>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let active_id = environment::active_id()?;
+        environment::list()?
+            .into_iter()
+            .map(|item| environment_overview(item, active_id.as_deref()))
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// 创建环境。
@@ -87,6 +103,45 @@ fn to_info(environment: Environment, active_id: Option<&str>) -> EnvironmentInfo
     }
 }
 
+fn environment_overview(
+    environment: Environment,
+    active_id: Option<&str>,
+) -> Result<EnvironmentOverview, String> {
+    let path = environment::directory(&environment.id)?;
+    let usage = environment_usage::measure(&environment.id)?;
+    let components = environment
+        .components
+        .iter()
+        .map(|item| EnvironmentComponentOverview {
+            component: item.component.clone(),
+            version: item.version.clone(),
+            display_name: registry::display_name(&item.component),
+            installed_at: item.installed_at.clone(),
+            status: component_status(&environment.id, &item.component, &item.version),
+        })
+        .collect();
+
+    Ok(EnvironmentOverview {
+        id: environment.id.clone(),
+        name: environment.name,
+        active: active_id == Some(environment.id.as_str()),
+        path: path.display().to_string(),
+        components,
+        usage,
+        created_at: environment.created_at,
+        last_activated_at: environment.last_activated_at,
+    })
+}
+
+fn component_status(environment_id: &str, component: &str, version: &str) -> String {
+    match service::component_status(environment_id, component, version) {
+        service::Status::Running => "running".to_string(),
+        service::Status::Stopped => "stopped".to_string(),
+        service::Status::Partial => "partial".to_string(),
+        service::Status::Error(error) => format!("error:{error}"),
+    }
+}
+
 #[derive(serde::Serialize)]
 pub struct EnvironmentInfo {
     id: String,
@@ -101,4 +156,25 @@ pub struct EnvironmentInfo {
 pub struct EnvironmentComponentInfo {
     component: String,
     version: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct EnvironmentOverview {
+    id: String,
+    name: String,
+    active: bool,
+    path: String,
+    components: Vec<EnvironmentComponentOverview>,
+    usage: EnvironmentUsage,
+    created_at: String,
+    last_activated_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct EnvironmentComponentOverview {
+    component: String,
+    version: String,
+    display_name: String,
+    installed_at: String,
+    status: String,
 }

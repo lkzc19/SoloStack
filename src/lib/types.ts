@@ -39,6 +39,34 @@ export interface EnvironmentInfo {
   last_activated_at: string | null;
 }
 
+export interface EnvironmentUsage {
+  components_bytes: number;
+  data_bytes: number;
+  log_bytes: number;
+  runtime_bytes: number;
+  other_bytes: number;
+  total_bytes: number;
+}
+
+export interface EnvironmentComponentOverview {
+  component: string;
+  version: string;
+  display_name: string;
+  installed_at: string;
+  status: string;
+}
+
+export interface EnvironmentOverview {
+  id: string;
+  name: string;
+  active: boolean;
+  path: string;
+  components: EnvironmentComponentOverview[];
+  usage: EnvironmentUsage;
+  created_at: string;
+  last_activated_at: string | null;
+}
+
 export interface UiComponent extends ComponentInfo {
   status: Status;
   statusText: string;

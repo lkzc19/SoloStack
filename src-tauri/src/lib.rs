@@ -93,6 +93,7 @@ pub fn run() {
             app::open_log_file,
             environment::list_environments,
             environment::get_active_environment,
+            environment::list_environment_overviews,
             environment::create_environment,
             environment::rename_environment,
             environment::delete_environment,
