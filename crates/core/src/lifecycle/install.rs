@@ -25,32 +25,87 @@ pub enum ProgressEvent {
 /// 安装进度回调（各阶段触发）。
 pub type InstallProgress = Box<dyn FnMut(ProgressEvent) + Send>;
 
+/// 安装取消状态。当前安装全局串行，因此不需要任务级取消令牌。
+pub struct InstallCancel {
+    flag: AtomicBool,
+    source: Mutex<Option<String>>,
+    stage: Mutex<Stage>,
+}
+
+impl Default for InstallCancel {
+    fn default() -> Self {
+        Self {
+            flag: AtomicBool::new(false),
+            source: Mutex::new(None),
+            stage: Mutex::new(Stage::Downloading),
+        }
+    }
+}
+
+impl InstallCancel {
+    pub fn cancel(&self, source: &str) {
+        if let Ok(mut current) = self.source.lock() {
+            if current.is_none() {
+                *current = Some(source.to_string());
+            }
+        }
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    fn set_stage(&self, stage: Stage) {
+        if let Ok(mut current) = self.stage.lock() {
+            *current = stage;
+        }
+    }
+
+    fn cancellation_message(&self, message: &str) -> String {
+        let source = self
+            .source
+            .lock()
+            .ok()
+            .and_then(|source| source.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let stage = self
+            .stage
+            .lock()
+            .map(|stage| stage.as_str().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        format!("{message}：来源 {source}，阶段 {stage}")
+    }
+}
+
 /// 安装一个组件：下载 → 解压 → 生成配置（原子；任一步失败回滚已建产物）。
 ///
 /// 返回实例目录（如 `data_root/components/hadoop/hadoop-3.5.0`）。
 pub fn install(
     config: &InstallConfig,
     progress: Option<InstallProgress>,
-    cancel: &AtomicBool,
+    cancel: &InstallCancel,
 ) -> Result<std::path::PathBuf, String> {
     let operation = crate::app::app_log::Operation::begin(
-        "install",
-        &config.component,
-        &config.version,
+        &config.environment_id,
         &format!(
             "开始安装 {} v{}（源：{}）",
             config.component, config.version, config.source_id
         ),
     );
     let result = install_inner(config, progress, cancel);
-    operation.finish(&result);
+    if result.is_err() && cancel.is_cancelled() {
+        operation.finish_cancelled(&cancel.cancellation_message("安装已取消"));
+    } else {
+        operation.finish(&result);
+    }
     result
 }
 
 fn install_inner(
     config: &InstallConfig,
     progress: Option<InstallProgress>,
-    cancel: &AtomicBool,
+    cancel: &InstallCancel,
 ) -> Result<std::path::PathBuf, String> {
     let name = &config.component;
     let version = &config.version;
@@ -77,17 +132,14 @@ fn install_inner(
     let artifact = crate::package::manifest::resolve_artifact(name, &config.source_id, version)?;
     let cached = download::target_path(&artifact.url)?.exists();
     emit(&shared, ProgressEvent::Checking(cached));
-    let _ = crate::app::app_log::info(
-        "install.download.begin",
-        &format!(
-            "{name} v{version} {}",
-            if cached {
-                "发现缓存包，开始 SHA256 校验"
-            } else {
-                "未发现缓存包，开始下载"
-            }
-        ),
-    );
+    let _ = crate::app::app_log::info(&format!(
+        "{name} v{version} {}",
+        if cached {
+            "发现缓存包，开始 SHA256 校验"
+        } else {
+            "未发现缓存包，开始下载"
+        }
+    ));
     let dl_progress: Option<crate::package::download::ProgressFn> = match &shared {
         Some(arc) => {
             let arc2 = Arc::clone(arc);
@@ -98,62 +150,43 @@ fn install_inner(
         }
         None => None,
     };
-    let archive = match download::download(&artifact.url, &artifact.sha256, dl_progress, cancel) {
-        Ok(a) => a,
-        Err(e) => {
-            let cancelled = cancel.load(Ordering::SeqCst) || e.contains("取消");
-            let _ = if cancelled {
-                crate::app::app_log::warn(
-                    "install.cancelled",
-                    &format!("{name} v{version} 安装已取消"),
-                )
-            } else {
-                crate::app::app_log::error(
-                    "install.download.failed",
-                    &format!("{name} v{version} 下载失败: {e}"),
-                )
-            };
-            return Err(e);
-        }
-    };
-    if cancel.load(Ordering::SeqCst) {
-        let _ = crate::app::app_log::warn(
-            "install.cancelled",
-            &format!("{name} v{version} 安装已取消"),
-        );
+    let archive =
+        match download::download(&artifact.url, &artifact.sha256, dl_progress, &cancel.flag) {
+            Ok(a) => a,
+            Err(e) => {
+                if !cancel.is_cancelled() {
+                    let _ = crate::app::app_log::error(&format!("{name} v{version} 下载失败: {e}"));
+                }
+                return Err(e);
+            }
+        };
+    if cancel.is_cancelled() {
         return Err("安装已取消".to_string());
     }
-    let _ = crate::app::app_log::info(
-        "install.download.done",
-        &format!("{name} v{version} 下载完成"),
-    );
+    let _ = crate::app::app_log::info(&format!("{name} v{version} 下载完成"));
 
     // 3. 解压到实例目录（tar.gz）
     guard.stage = Stage::Extracting;
+    cancel.set_stage(Stage::Extracting);
     emit(&shared, ProgressEvent::Extracting);
     let instance = paths::instance_dir(environment_id, name, version).map_err(|e| e.to_string())?;
     extract::extract_tar_gz(&archive, &instance)?;
-    let _ = crate::app::app_log::info(
-        "install.extract.done",
-        &format!("{name} v{version} 解压完成"),
-    );
+    let _ = crate::app::app_log::info(&format!("{name} v{version} 解压完成"));
 
-    if cancel.load(Ordering::SeqCst) {
-        let _ = crate::app::app_log::warn(
-            "install.cancelled",
-            &format!("{name} v{version} 安装已取消"),
-        );
+    if cancel.is_cancelled() {
         return Err("安装已取消".to_string());
     }
 
     // 4. 生成配置（含探活端口）+ JAVA_HOME
     guard.stage = Stage::Configuring;
+    cancel.set_stage(Stage::Configuring);
     emit(&shared, ProgressEvent::Configuring);
     apply_install(config)?;
-    let _ = crate::app::app_log::info(
-        "install.config.done",
-        &format!("{name} v{version} 配置生成完成"),
-    );
+    let _ = crate::app::app_log::info(&format!("{name} v{version} 配置生成完成"));
+
+    if cancel.is_cancelled() {
+        return Err("安装已取消".to_string());
+    }
 
     // 5. 登记环境组件清单；失败时由守卫回滚实例目录
     let mut environment = crate::app::environment::load(environment_id)?;
@@ -162,7 +195,7 @@ fn install_inner(
     // 6. 通知完成
     guard.done = true;
     emit(&shared, ProgressEvent::Done);
-    let _ = crate::app::app_log::info("install.done", &format!("{name} v{version} 安装完成"));
+    let _ = crate::app::app_log::info(&format!("{name} v{version} 安装完成"));
 
     Ok(instance)
 }
@@ -216,10 +249,21 @@ fn apply_java_home(
 }
 
 /// 安装阶段（用于清理守卫判断哪些产物已被本次安装改动）。
+#[derive(Clone, Copy)]
 enum Stage {
     Downloading,
     Extracting,
     Configuring,
+}
+
+impl Stage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Downloading => "download",
+            Self::Extracting => "extract",
+            Self::Configuring => "configure",
+        }
+    }
 }
 
 /// 安装清理守卫：安装未正常完成（报错 / 取消）时，已进入解压 / 配置阶段则
@@ -276,10 +320,23 @@ mod tests {
         let environment = crate::app::environment::create("默认环境").unwrap();
         cfg.environment_id = environment.id;
         cfg.source_id = "不存在的源".into();
-        let cancel = AtomicBool::new(false);
+        let cancel = InstallCancel::default();
         let err = install(&cfg, None, &cancel);
         assert!(err.is_err());
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cancellation_state_records_source_and_stage() {
+        let cancel = InstallCancel::default();
+        cancel.set_stage(Stage::Extracting);
+        cancel.cancel("user");
+
+        assert!(cancel.is_cancelled());
+        assert_eq!(
+            cancel.cancellation_message("安装已取消"),
+            "安装已取消：来源 user，阶段 extract"
+        );
     }
 }

@@ -13,7 +13,7 @@
 mod commands;
 mod tray;
 
-use commands::{app, component, environment, install, logs};
+use commands::{app, component, environment, install, log_stream, logs};
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,22 +24,14 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             if let Err(error) = solostack_core::app::migration::migrate_app_layout() {
-                let _ = solostack_core::app::app_log::error(
-                    "migration.legacy_layout.failed",
-                    &format!("旧应用目录迁移失败: {error}"),
-                );
+                let _ =
+                    solostack_core::app::app_log::error(&format!("旧应用目录迁移失败: {error}"));
             }
             if let Err(error) = solostack_core::app::migration::migrate_environment_layout() {
-                let _ = solostack_core::app::app_log::error(
-                    "migration.environment.failed",
-                    &format!("环境目录迁移失败: {error}"),
-                );
+                let _ = solostack_core::app::app_log::error(&format!("环境目录迁移失败: {error}"));
             }
             if let Err(error) = solostack_core::app::environment::ensure_initialized() {
-                let _ = solostack_core::app::app_log::error(
-                    "migration.environment.initialize_failed",
-                    &format!("环境初始化失败: {error}"),
-                );
+                let _ = solostack_core::app::app_log::error(&format!("环境初始化失败: {error}"));
             }
             if let Ok(active_id) = solostack_core::app::environment::active_id() {
                 if let Ok(environments) = solostack_core::app::environment::list() {
@@ -52,13 +44,10 @@ pub fn run() {
                                 &environment,
                             )
                         {
-                            let _ = solostack_core::app::app_log::warn(
-                                "environment.startup.stop_failed",
-                                &format!(
-                                    "启动时停止非活动环境《{}》失败: {error}",
-                                    environment.name
-                                ),
-                            );
+                            let _ = solostack_core::app::app_log::warn(&format!(
+                                "启动时停止非活动环境《{}》失败: {error}",
+                                environment.name
+                            ));
                         }
                     }
                 }
@@ -88,6 +77,7 @@ pub fn run() {
             app::get_settings,
             app::set_logging_settings,
             app::set_close_to_tray,
+            app::set_show_logs_button,
             app::list_apps,
             app::set_log_viewer,
             app::open_log_file,
@@ -114,6 +104,10 @@ pub fn run() {
             install::list_download_packages,
             install::delete_download_packages,
             install::uninstall_component,
+            log_stream::start_log_stream,
+            log_stream::stop_log_stream,
+            log_stream::pause_log_stream,
+            log_stream::resume_log_stream,
             logs::list_component_logs,
             logs::read_component_log_tail,
             logs::query_app_logs

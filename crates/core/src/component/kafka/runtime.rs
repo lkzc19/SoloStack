@@ -81,10 +81,9 @@ fn format_storage_if_needed(environment_id: &str, version: &str) -> Result<(), S
 
     let conf = component::config_path(environment_id, NAME, version, F_PROPS)?;
     println!("首次使用，格式化 Kafka KRaft 存储...");
-    let _ = crate::app::app_log::info(
-        "init.kafka.format",
-        &format!("首次启动 {NAME} v{version}，格式化 KRaft 存储目录"),
-    );
+    let _ = crate::app::app_log::info(&format!(
+        "首次启动 {NAME} v{version}，格式化 KRaft 存储目录"
+    ));
 
     let cluster_id = exec::run_to_string(
         environment_id,

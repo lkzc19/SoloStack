@@ -14,7 +14,6 @@
 //! 二次启动、卸载；结束后不会留下实例或常驻进程。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use solostack_core::app::environment;
@@ -107,7 +106,7 @@ fn run_lifecycle(case: &SmokeCase, source_id: &str) -> Result<(), String> {
     )?;
 
     let params = install_params(name)?;
-    let cancel = AtomicBool::new(false);
+    let cancel = install::InstallCancel::default();
     install::install(
         &InstallConfig {
             environment_id: environment_id.to_string(),

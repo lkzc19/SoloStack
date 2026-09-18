@@ -127,6 +127,12 @@
   align-items: center;
   gap: 3px;
 }
+.topbar-system-actions {
+  display: flex;
+  align-items: center;
+  /* 按钮图标居中，内部间距需补偿按钮两侧的视觉留白。 */
+  gap: 0.2rem;
+}
 .brand-name {
   font-family: var(--font-display);
   font-weight: 600;

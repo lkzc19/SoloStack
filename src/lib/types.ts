@@ -91,30 +91,20 @@ export interface SettingsInfo {
   data_root: string;
   log_viewer: string;
   close_to_tray: boolean;
+  show_logs_button: boolean;
   log_level: string;
   log_retention_days: number;
   log_max_total_mb: number;
 }
 
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
-export type LogSource =
-  | "app"
-  | "process"
-  | "script_stdout"
-  | "script_stderr"
-  | "component";
 
 export interface LogRecord {
   timestamp: string;
+  trace_id?: string;
   level: LogLevel;
-  source: LogSource;
-  event: string;
-  component?: string;
-  version?: string;
-  operation?: string;
-  task_id?: string;
+  environment_id?: string;
   message: string;
-  fields: Record<string, string>;
 }
 
 export interface LogPage {
@@ -122,9 +112,39 @@ export interface LogPage {
   records: LogRecord[];
   total: number;
   truncated: boolean;
-  components: string[];
-  versions: string[];
-  operations: string[];
+  environments: string[];
+}
+
+export interface StreamLogLine {
+  timestamp: string | null;
+  trace_id?: string;
+  level: LogLevel;
+  environment_id?: string;
+  message: string;
+}
+
+export interface LogStreamBatch {
+  stream_id: string;
+  sequence: number;
+  records: StreamLogLine[];
+  dropped: number;
+}
+
+export type LogStreamState = "starting" | "following" | "paused" | "stopped" | "error";
+
+export interface LogStreamStatus {
+  stream_id: string;
+  state: LogStreamState;
+  offset: number;
+  dropped: number;
+  rotated: boolean;
+  error: string | null;
+}
+
+export interface StartLogStreamResponse {
+  stream_id: string;
+  records: StreamLogLine[];
+  offset: number;
 }
 
 export interface InstallSource {

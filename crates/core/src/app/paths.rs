@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
+use super::id;
 
 /// SoloStack 数据根目录名（固定 `~/.solostack`）。
 pub const ROOT_DIR_NAME: &str = ".solostack";
@@ -37,12 +37,14 @@ fn join_root(dir: &str) -> Result<PathBuf, std::io::Error> {
 
 /// 校验环境 ID，防止把用户可控字符串拼进目录导致路径逃逸。
 pub fn validate_environment_id(id: &str) -> Result<(), std::io::Error> {
-    Uuid::parse_str(id).map(|_| ()).map_err(|_| {
-        std::io::Error::new(
+    if id::is_environment_id(id) {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("无效的环境 ID: {id}"),
-        )
-    })
+        ))
+    }
 }
 
 fn checked_environment_dir(id: &str) -> Result<PathBuf, std::io::Error> {

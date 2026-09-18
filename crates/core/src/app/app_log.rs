@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +9,7 @@ use std::time::Instant;
 use chrono::{Days, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
 
-use crate::app::{paths, settings};
+use crate::app::{id, paths, settings};
 
 /// 日志级别常量（保留旧调用接口）。
 pub const INFO: &str = "INFO";
@@ -20,9 +20,7 @@ const MAX_ROTATED_FILES: u32 = 5;
 const DEFAULT_QUERY_LIMIT: usize = 1_000;
 const MAX_QUERY_LIMIT: usize = 5_000;
 const PRUNE_INTERVAL: u64 = 256;
-const MAX_STREAM_MESSAGE_CHARS: usize = 4_000;
 
-static TASK_COUNTER: AtomicU64 = AtomicU64::new(1);
 static WRITE_COUNTER: AtomicU64 = AtomicU64::new(1);
 static WRITE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -65,44 +63,27 @@ impl LogLevel {
     }
 }
 
-/// 日志来源。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogSource {
-    App,
-    Process,
-    ScriptStdout,
-    ScriptStderr,
-    Component,
-}
-
 /// 一条结构化日志。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogRecord {
     pub timestamp: String,
+    #[serde(
+        rename = "trace_id",
+        alias = "task_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub trace_id: Option<String>,
     pub level: LogLevel,
-    pub source: LogSource,
-    pub event: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub component: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
+    pub environment_id: Option<String>,
     pub message: String,
-    #[serde(default)]
-    pub fields: BTreeMap<String, String>,
 }
 
-/// 当前任务上下文。
+/// 当前日志关联上下文。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogContext {
-    pub component: Option<String>,
-    pub version: Option<String>,
-    pub operation: Option<String>,
-    pub task_id: Option<String>,
+    pub environment_id: Option<String>,
+    pub trace_id: Option<String>,
 }
 
 /// GUI 查询参数。
@@ -110,9 +91,8 @@ pub struct LogContext {
 pub struct LogQuery {
     pub date: Option<String>,
     pub level: Option<LogLevel>,
-    pub component: Option<String>,
-    pub version: Option<String>,
-    pub operation: Option<String>,
+    pub environment_id: Option<String>,
+    pub trace_id: Option<String>,
     pub search: Option<String>,
     pub limit: Option<usize>,
 }
@@ -124,9 +104,7 @@ pub struct LogPage {
     pub records: Vec<LogRecord>,
     pub total: usize,
     pub truncated: bool,
-    pub components: Vec<String>,
-    pub versions: Vec<String>,
-    pub operations: Vec<String>,
+    pub environments: Vec<String>,
 }
 
 /// 一次操作的日志作用域。
@@ -137,28 +115,14 @@ pub struct Operation {
 }
 
 impl Operation {
-    pub fn begin(operation: &str, component: &str, version: &str, begin_message: &str) -> Self {
-        let task_id = format!(
-            "{}-{}-{}",
-            operation,
-            std::process::id(),
-            TASK_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
+    pub fn begin(environment_id: &str, begin_message: &str) -> Self {
+        let trace_id = id::new_id();
         let context = LogContext {
-            component: Some(component.to_string()),
-            version: Some(version.to_string()),
-            operation: Some(operation.to_string()),
-            task_id: Some(task_id),
+            environment_id: Some(environment_id.to_string()),
+            trace_id: Some(trace_id),
         };
         CURRENT_CONTEXT.with(|stack| stack.borrow_mut().push(context.clone()));
-        let _ = log_with_context(
-            LogLevel::Info,
-            LogSource::App,
-            "operation.begin",
-            begin_message,
-            Some(&context),
-            BTreeMap::new(),
-        );
+        let _ = log_with_context(LogLevel::Info, begin_message, Some(&context));
         Self {
             context,
             started: Instant::now(),
@@ -171,26 +135,16 @@ impl Operation {
     }
 
     pub fn finish<T>(mut self, result: &Result<T, String>) {
-        let mut fields = BTreeMap::new();
-        fields.insert(
-            "duration_ms".to_string(),
-            self.started.elapsed().as_millis().to_string(),
-        );
+        let duration_ms = self.started.elapsed().as_millis();
         match result {
             Ok(_) => {
-                fields.insert("success".to_string(), "true".to_string());
                 let _ = log_with_context(
                     LogLevel::Info,
-                    LogSource::App,
-                    "operation.end",
-                    "操作完成",
+                    &format!("操作完成（耗时 {duration_ms} ms）"),
                     Some(&self.context),
-                    fields,
                 );
             }
             Err(error) => {
-                fields.insert("success".to_string(), "false".to_string());
-                fields.insert("error".to_string(), redact_text(error));
                 let level = if error.contains("取消") {
                     LogLevel::Warn
                 } else {
@@ -198,14 +152,22 @@ impl Operation {
                 };
                 let _ = log_with_context(
                     level,
-                    LogSource::App,
-                    "operation.failed",
-                    error,
+                    &format!("{error}（耗时 {duration_ms} ms）"),
                     Some(&self.context),
-                    fields,
                 );
             }
         }
+        self.finished = true;
+    }
+
+    /// 记录一次结构化取消，避免同时写取消事件和 operation.failed。
+    pub fn finish_cancelled(mut self, message: &str) {
+        let duration_ms = self.started.elapsed().as_millis();
+        let _ = log_with_context(
+            LogLevel::Warn,
+            &format!("{message}（耗时 {duration_ms} ms）"),
+            Some(&self.context),
+        );
         self.finished = true;
     }
 }
@@ -213,14 +175,7 @@ impl Operation {
 impl Drop for Operation {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = log_with_context(
-                LogLevel::Warn,
-                LogSource::App,
-                "operation.aborted",
-                "操作未正常结束",
-                Some(&self.context),
-                BTreeMap::new(),
-            );
+            let _ = log_with_context(LogLevel::Warn, "操作未正常结束", Some(&self.context));
         }
         CURRENT_CONTEXT.with(|stack| {
             stack.borrow_mut().pop();
@@ -266,82 +221,35 @@ pub fn log_file() -> Result<PathBuf, String> {
 /// 追加一条兼容格式日志。新日志仍写入完整结构化字段。
 pub fn append(level: &str, message: &str) -> Result<(), String> {
     let level = LogLevel::parse(level).unwrap_or(LogLevel::Info);
-    log_with_context(
-        level,
-        LogSource::App,
-        "legacy",
-        message,
-        current_context().as_ref(),
-        BTreeMap::new(),
-    )
+    log_with_context(level, message, current_context().as_ref())
 }
 
-pub fn debug(event: &str, message: &str) -> Result<(), String> {
-    log(
-        LogLevel::Debug,
-        LogSource::App,
-        event,
-        message,
-        BTreeMap::new(),
-    )
+pub fn debug(message: &str) -> Result<(), String> {
+    log(LogLevel::Debug, message)
 }
 
-pub fn info(event: &str, message: &str) -> Result<(), String> {
-    log(
-        LogLevel::Info,
-        LogSource::App,
-        event,
-        message,
-        BTreeMap::new(),
-    )
+pub fn info(message: &str) -> Result<(), String> {
+    log(LogLevel::Info, message)
 }
 
-pub fn warn(event: &str, message: &str) -> Result<(), String> {
-    log(
-        LogLevel::Warn,
-        LogSource::App,
-        event,
-        message,
-        BTreeMap::new(),
-    )
+pub fn warn(message: &str) -> Result<(), String> {
+    log(LogLevel::Warn, message)
 }
 
-pub fn error(event: &str, message: &str) -> Result<(), String> {
-    log(
-        LogLevel::Error,
-        LogSource::App,
-        event,
-        message,
-        BTreeMap::new(),
-    )
+pub fn error(message: &str) -> Result<(), String> {
+    log(LogLevel::Error, message)
 }
 
 /// 使用当前任务上下文写日志。
-pub fn log(
-    level: LogLevel,
-    source: LogSource,
-    event: &str,
-    message: &str,
-    fields: BTreeMap<String, String>,
-) -> Result<(), String> {
-    log_with_context(
-        level,
-        source,
-        event,
-        message,
-        current_context().as_ref(),
-        fields,
-    )
+pub fn log(level: LogLevel, message: &str) -> Result<(), String> {
+    log_with_context(level, message, current_context().as_ref())
 }
 
 /// 使用显式上下文写日志。
 pub fn log_with_context(
     level: LogLevel,
-    source: LogSource,
-    event: &str,
     message: &str,
     context: Option<&LogContext>,
-    fields: BTreeMap<String, String>,
 ) -> Result<(), String> {
     if !enabled(level) {
         return Ok(());
@@ -349,25 +257,10 @@ pub fn log_with_context(
     let context = context.cloned().unwrap_or_default();
     let record = LogRecord {
         timestamp: Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string(),
+        trace_id: context.trace_id,
         level,
-        source,
-        event: event.to_string(),
-        component: context.component,
-        version: context.version,
-        operation: context.operation,
-        task_id: context.task_id,
+        environment_id: context.environment_id,
         message: redact_text(message),
-        fields: fields
-            .into_iter()
-            .map(|(key, value)| {
-                let value = if sensitive_key(&key) {
-                    "<redacted>".to_string()
-                } else {
-                    redact_text(&value)
-                };
-                (key, value)
-            })
-            .collect(),
     };
     write_record(&record)
 }
@@ -377,17 +270,12 @@ pub fn log_script_output(context: Option<&LogContext>, stdout: bool, text: &str)
     if text.is_empty() {
         return;
     }
-    let (source, level, event) = if stdout {
-        (LogSource::ScriptStdout, LogLevel::Debug, "script.stdout")
+    let level = if stdout {
+        LogLevel::Info
     } else {
-        (LogSource::ScriptStderr, LogLevel::Warn, "script.stderr")
+        LogLevel::Warn
     };
-    let mut fields = BTreeMap::new();
-    fields.insert(
-        "truncated".to_string(),
-        (text.chars().count() > MAX_STREAM_MESSAGE_CHARS).to_string(),
-    );
-    let _ = log_with_context(level, source, event, text, context, fields);
+    let _ = log_with_context(level, text, context);
 }
 
 fn enabled(level: LogLevel) -> bool {
@@ -508,51 +396,31 @@ pub fn query_logs(query: LogQuery) -> Result<LogPage, String> {
         .limit
         .unwrap_or(DEFAULT_QUERY_LIMIT)
         .clamp(1, MAX_QUERY_LIMIT);
-    let mut component_set = HashSet::new();
-    let mut version_set = HashSet::new();
-    let mut operation_set = HashSet::new();
+    let mut environment_set = HashSet::new();
     let mut matched = VecDeque::with_capacity(limit);
     let mut total = 0;
 
     visit_records_for(&date, |record| {
-        if let Some(component) = &record.component {
-            component_set.insert(component.clone());
-        }
-        if let Some(version) = &record.version {
-            version_set.insert(version.clone());
-        }
-        if let Some(operation) = &record.operation {
-            operation_set.insert(operation.clone());
+        if let Some(environment_id) = &record.environment_id {
+            environment_set.insert(environment_id.clone());
         }
         if query.level.is_some_and(|level| record.level != level)
             || query
-                .component
+                .environment_id
                 .as_deref()
-                .is_some_and(|value| record.component.as_deref() != Some(value))
+                .is_some_and(|value| record.environment_id.as_deref() != Some(value))
             || query
-                .version
+                .trace_id
                 .as_deref()
-                .is_some_and(|value| record.version.as_deref() != Some(value))
-            || query
-                .operation
-                .as_deref()
-                .is_some_and(|value| record.operation.as_deref() != Some(value))
+                .is_some_and(|value| record.trace_id.as_deref() != Some(value))
         {
             return;
         }
         if let Some(needle) = &needle {
-            let fields = record
-                .fields
-                .iter()
-                .map(|(key, value)| format!("{key}={value}"))
-                .collect::<Vec<_>>()
-                .join(" ");
             let haystack = format!(
-                "{} {} {} {}",
-                record.event,
+                "{} {}",
                 record.message,
-                fields,
-                record.task_id.as_deref().unwrap_or("")
+                record.trace_id.as_deref().unwrap_or("")
             )
             .to_lowercase();
             if !haystack.contains(needle) {
@@ -566,20 +434,14 @@ pub fn query_logs(query: LogQuery) -> Result<LogPage, String> {
         matched.push_back(record);
     })?;
 
-    let mut components: Vec<String> = component_set.into_iter().collect();
-    components.sort();
-    let mut versions: Vec<String> = version_set.into_iter().collect();
-    versions.sort();
-    let mut operations: Vec<String> = operation_set.into_iter().collect();
-    operations.sort();
+    let mut environments: Vec<String> = environment_set.into_iter().collect();
+    environments.sort();
     Ok(LogPage {
         date,
         records: matched.into_iter().collect(),
         total,
         truncated: total > limit,
-        components,
-        versions,
-        operations,
+        environments,
     })
 }
 
@@ -684,41 +546,22 @@ fn parse_record(line: &str, date: &str) -> Option<LogRecord> {
     let (level, message) = rest.split_once(' ')?;
     Some(LogRecord {
         timestamp: format!("{date}T{time}"),
+        trace_id: None,
         level: LogLevel::parse(level)?,
-        source: LogSource::App,
-        event: "legacy".to_string(),
-        component: None,
-        version: None,
-        operation: None,
-        task_id: None,
+        environment_id: None,
         message: message.to_string(),
-        fields: BTreeMap::new(),
     })
 }
 
 fn format_record(record: &LogRecord) -> String {
-    let mut line = format!(
-        "[{}] {:<5} {}",
+    format!(
+        "[{}] [{}] {:<5} [{}] {}",
         record.timestamp,
+        record.trace_id.as_deref().unwrap_or("-"),
         record.level.as_str(),
+        record.environment_id.as_deref().unwrap_or("-"),
         record.message
-    );
-    if let Some(component) = &record.component {
-        line.push_str(&format!(" component={component}"));
-    }
-    if let Some(version) = &record.version {
-        line.push_str(&format!(" version={version}"));
-    }
-    if let Some(operation) = &record.operation {
-        line.push_str(&format!(" operation={operation}"));
-    }
-    if let Some(task_id) = &record.task_id {
-        line.push_str(&format!(" task={task_id}"));
-    }
-    for (key, value) in &record.fields {
-        line.push_str(&format!(" {key}={value}"));
-    }
-    line
+    )
 }
 
 /// 从文件名解析日期和分片号。
@@ -820,14 +663,7 @@ fn redact_text(value: &str) -> String {
             search_from = start + "<redacted>".len();
         }
     }
-    let chars = out.chars().count();
-    if chars > MAX_STREAM_MESSAGE_CHARS {
-        let mut truncated: String = out.chars().take(MAX_STREAM_MESSAGE_CHARS).collect();
-        truncated.push_str("...[截断]");
-        truncated
-    } else {
-        out
-    }
+    out
 }
 
 #[cfg(test)]
@@ -881,7 +717,6 @@ mod tests {
         .unwrap();
         assert_eq!(page.records.len(), 1);
         assert_eq!(page.records[0].message, "测试日志");
-        assert_eq!(page.records[0].source, LogSource::App);
 
         let dates = list_log_dates().unwrap();
         assert_eq!(dates, vec![today()]);
@@ -919,25 +754,136 @@ mod tests {
         let mut settings = settings::Settings::load().unwrap();
         settings.log.level = "debug".to_string();
         settings.save().unwrap();
-        let operation = Operation::begin("start", "kafka", "4.3.1", "启动组件 kafka v4.3.1");
+        let environment_id = "00000000-0000-4000-8000-000000000001";
+        let operation = Operation::begin(environment_id, "启动组件 kafka v4.3.1");
+        let trace_id = operation.context().trace_id.clone().unwrap();
         log_script_output(current_context().as_ref(), true, "broker started");
         operation.finish(&Ok::<(), String>(()));
 
         let page = query_logs(LogQuery {
             date: Some(today()),
-            operation: Some("start".to_string()),
             ..LogQuery::default()
         })
         .unwrap();
-        assert!(page.records.iter().all(|record| record.task_id.is_some()));
+        assert!(page.records.iter().all(|record| record.trace_id.is_some()));
         assert!(page
             .records
             .iter()
-            .any(|record| record.source == LogSource::ScriptStdout));
+            .all(|record| { record.environment_id.as_deref() == Some(environment_id) }));
+        assert_eq!(page.environments, vec![environment_id.to_string()]);
         assert!(page
             .records
             .iter()
-            .any(|record| record.event == "operation.end"));
+            .any(|record| record.message == "broker started"));
+        assert!(page
+            .records
+            .iter()
+            .any(|record| record.message.contains("操作完成")));
+
+        let filtered = query_logs(LogQuery {
+            date: Some(today()),
+            environment_id: Some(environment_id.to_string()),
+            ..LogQuery::default()
+        })
+        .unwrap();
+        assert_eq!(filtered.total, 3);
+        let empty = query_logs(LogQuery {
+            date: Some(today()),
+            environment_id: Some("00000000-0000-4000-8000-000000000002".to_string()),
+            ..LogQuery::default()
+        })
+        .unwrap();
+        assert_eq!(empty.total, 0);
+
+        let by_trace = query_logs(LogQuery {
+            date: Some(today()),
+            trace_id: Some(trace_id),
+            ..LogQuery::default()
+        })
+        .unwrap();
+        assert_eq!(by_trace.total, 3);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn legacy_task_id_is_read_as_trace_id() {
+        let record: LogRecord = serde_json::from_str(
+            r#"{
+                "timestamp":"2026-09-14T15:19:01.000+08:00",
+                "level":"info",
+                "source":"app",
+                "event":"operation.begin",
+                "task_id":"start-42-1",
+                "message":"legacy"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(record.trace_id.as_deref(), Some("start-42-1"));
+    }
+
+    #[test]
+    fn record_serializes_only_core_fields() {
+        let record = LogRecord {
+            timestamp: "2026-09-18T14:30:01.123+08:00".to_string(),
+            trace_id: Some("V1StGXR8".to_string()),
+            level: LogLevel::Info,
+            environment_id: Some("B2xQ7mNp".to_string()),
+            message: "启动组件 Kafka 4.3.1".to_string(),
+        };
+        let value = serde_json::to_value(record).unwrap();
+        let object = value.as_object().unwrap();
+        let keys: HashSet<&str> = object.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            HashSet::from([
+                "timestamp",
+                "trace_id",
+                "level",
+                "environment_id",
+                "message"
+            ])
+        );
+    }
+
+    #[test]
+    fn trace_id_is_nanoid_without_business_context() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = test_home("trace-id");
+        let operation = Operation::begin(
+            "00000000-0000-4000-8000-000000000001",
+            "开始安装 kafka v4.3.1",
+        );
+        let trace_id = operation.context().trace_id.as_deref().unwrap();
+        assert_eq!(trace_id.len(), 8);
+        assert!(trace_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert!(!trace_id.contains("install"));
+        assert!(!trace_id.contains("kafka"));
+        operation.finish(&Ok::<(), String>(()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cancelled_operation_writes_one_structured_event() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let tmp = test_home("cancelled");
+        let operation = Operation::begin(
+            "00000000-0000-4000-8000-000000000001",
+            "开始安装 kafka v4.3.1",
+        );
+        operation.finish_cancelled("安装已取消：来源 user，阶段 download");
+
+        let page = query_logs(LogQuery {
+            date: Some(today()),
+            ..LogQuery::default()
+        })
+        .unwrap();
+        assert_eq!(page.records.len(), 2);
+        assert_eq!(page.records[0].message, "开始安装 kafka v4.3.1");
+        assert!(page.records[1].message.contains("安装已取消"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -963,6 +909,12 @@ mod tests {
                 ("JAVA_HOME".to_string(), "/jdk".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn redaction_does_not_truncate_long_text() {
+        let value = "x".repeat(5_000);
+        assert_eq!(redact_text(&value), value);
     }
 
     #[test]

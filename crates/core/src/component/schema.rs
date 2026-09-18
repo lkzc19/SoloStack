@@ -33,9 +33,7 @@ pub fn save_fields(
     updates: &[ConfigFieldUpdate],
 ) -> Result<(), String> {
     let operation = crate::app::app_log::Operation::begin(
-        "save-config",
-        name,
-        version,
+        environment_id,
         &format!("保存 {name} v{version} 配置"),
     );
     let result = save_fields_inner(environment_id, name, version, updates);
@@ -87,7 +85,7 @@ fn save_fields_inner(
 
     config::apply_plan(&plan).map_err(|error| {
         let message = format!("保存 {name} v{version} 配置失败: {error}");
-        let _ = crate::app::app_log::error("config.save.failed", &message);
+        let _ = crate::app::app_log::error(&message);
         message
     })
 }

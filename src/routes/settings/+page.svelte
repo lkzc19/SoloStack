@@ -4,7 +4,7 @@
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check, type Update } from "@tauri-apps/plugin-updater";
   import { Folder } from "lucide-svelte";
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { Popover } from "bits-ui";
   import {
     Activity,
@@ -16,18 +16,17 @@
     Download,
     Database,
     ExternalLink,
-    FileText,
     HardDrive,
     Monitor,
     Moon,
     Pencil,
     RefreshCw,
+    ScrollText,
     Sun,
     Trash2,
     X,
   } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
-  import DatePicker from "$lib/components/date-picker.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
   import Select from "$lib/components/ui/select/select.svelte";
   import Switch from "$lib/components/ui/switch/switch.svelte";
@@ -52,13 +51,8 @@
 
   let settingsInfo = $state<SettingsInfo | null>(null);
   let settingsTab = $state<
-    "general" | "logs" | "cache" | "environments" | "advanced" | "about"
+    "general" | "cache" | "environments" | "advanced" | "about"
   >("general");
-  let appLogs = $state("");
-  let appLogsBusy = $state(false);
-  let logDates = $state<string[]>([]);
-  let selectedLogDate = $state("");
-  let appLogRefresh = $state(0);
   let loggingLevel = $state("info");
   let logRetentionDays = $state(7);
   let logMaxTotalMb = $state(1024);
@@ -69,8 +63,8 @@
   let apps = $state<AppDef[]>([]);
   let logViewer = $state("");
   let closeToTray = $state(true);
+  let showLogsButton = $state(true);
   let openEditor = $state(false);
-  let openRefresh = $state(false);
   let updateStatus = $state<
     "idle" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "error"
   >("idle");
@@ -97,16 +91,6 @@
       ? `${fmtBytes(updateDownloaded)} / ${fmtBytes(updateTotal)}`
       : fmtBytes(updateDownloaded)
   );
-  const refreshItems = $derived([
-    { value: "0", label: "不刷新" },
-    { value: "5", label: "5 秒" },
-    { value: "10", label: "10 秒" },
-    { value: "30", label: "30 秒" },
-    { value: "60", label: "60 秒" },
-  ]);
-  const refreshLabel = $derived(
-    refreshItems.find((i) => Number(i.value) === appLogRefresh)?.label ?? "不刷新"
-  );
   const logLevelItems = [
     { value: "error", label: "ERROR" },
     { value: "warn", label: "WARN" },
@@ -130,6 +114,7 @@
       settingsInfo = await invoke<SettingsInfo>("get_settings");
       logViewer = settingsInfo.log_viewer;
       closeToTray = settingsInfo.close_to_tray;
+      showLogsButton = settingsInfo.show_logs_button;
       loggingLevel = settingsInfo.log_level;
       logRetentionDays = settingsInfo.log_retention_days;
       logMaxTotalMb = settingsInfo.log_max_total_mb;
@@ -165,6 +150,19 @@
       flashSuccess("窗口行为已更新");
     } catch (e) {
       closeToTray = previous;
+      store.errorMsg = String(e);
+    }
+  }
+
+  async function changeShowLogsButton(value: boolean) {
+    const previous = showLogsButton;
+    showLogsButton = value;
+    try {
+      await invoke("set_show_logs_button", { showLogsButton: value });
+      store.showLogsButton = value;
+      flashSuccess("日志入口设置已更新");
+    } catch (e) {
+      showLogsButton = previous;
       store.errorMsg = String(e);
     }
   }
@@ -277,7 +275,7 @@
   }
 
   function switchSettingsTab(
-    t: "general" | "logs" | "cache" | "environments" | "advanced" | "about"
+    t: "general" | "cache" | "environments" | "advanced" | "about"
   ) {
     settingsTab = t;
     if (t === "cache") loadCache();
@@ -285,61 +283,6 @@
       openEnvironmentId = null;
       void loadEnvironmentOverviews();
     }
-  }
-
-  async function loadLogsView() {
-    await loadLogDates();
-    await loadAppLogs();
-  }
-
-  async function loadLogDates() {
-    try {
-      logDates = await invoke<string[]>("list_log_dates");
-      // 默认选最新的（倒序第一个，即今天或最近一天）
-      if (!logDates.includes(selectedLogDate)) {
-        selectedLogDate = logDates[0] ?? "";
-      }
-    } catch {
-      logDates = [];
-    }
-  }
-
-  async function loadAppLogs() {
-    appLogsBusy = true;
-    try {
-      appLogs = await invoke<string>("get_app_logs", {
-        date: selectedLogDate || null,
-      });
-      autoScrollLogs();
-    } catch (e) {
-      appLogs = String(e);
-    } finally {
-      appLogsBusy = false;
-    }
-  }
-
-  // 日志自动刷新：按选择的频率（0 = 不刷新）
-  $effect(() => {
-    if (settingsTab !== "logs") return;
-    if (appLogRefresh <= 0) return;
-    const timer = setInterval(loadAppLogs, appLogRefresh * 1000);
-    return () => clearInterval(timer);
-  });
-
-  $effect(() => {
-    if (settingsTab === "logs") {
-      untrack(() => {
-        void loadLogsView();
-      });
-    }
-  });
-
-  let logBox = $state<HTMLPreElement | undefined>(undefined);
-  function autoScrollLogs() {
-    // 等 DOM 更新后滚到底部
-    setTimeout(() => {
-      if (logBox) logBox.scrollTop = logBox.scrollHeight;
-    }, 0);
   }
 
   async function loadCache() {
@@ -509,14 +452,6 @@
       <button
         class="settings-tab"
         type="button"
-        class:active={settingsTab === "logs"}
-        onclick={() => switchSettingsTab("logs")}
-      >
-        日志
-      </button>
-      <button
-        class="settings-tab"
-        type="button"
         class:active={settingsTab === "cache"}
         onclick={() => switchSettingsTab("cache")}
       >
@@ -605,6 +540,28 @@
         </div>
       </section>
       <section class="settings-section">
+        <h2 class="settings-title">界面</h2>
+        <hr class="settings-divider" />
+        <div class="settings-toggle-row">
+          <div class="settings-toggle-content">
+            <span class="settings-toggle-icon">
+              <ScrollText size={17} aria-hidden="true" />
+            </span>
+            <div class="settings-toggle-copy">
+              <div class="settings-toggle-label">显示日志入口</div>
+              <p class="settings-toggle-desc">
+                在主页顶部设置按钮右侧显示实时日志按钮。
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={showLogsButton}
+            onCheckedChange={changeShowLogsButton}
+            label="显示日志入口"
+          />
+        </div>
+      </section>
+      <section class="settings-section">
         <h2 class="settings-title">首选编辑器</h2>
         <p class="settings-desc">选择点击查看文件时使用的编辑器应用。</p>
         <Popover.Root bind:open={openEditor}>
@@ -640,46 +597,6 @@
           </Popover.Content>
         </Popover.Root>
         <p class="editor-fallback">如果选择的编辑器不可用，将自动使用系统默认编辑器。</p>
-      </section>
-    {:else if settingsTab === "logs"}
-      <section class="settings-section">
-        <h2 class="settings-title">日志</h2>
-        <p class="settings-desc">查看 SoloStack 运行日志，选择日期查看某天记录，可设置自动刷新。</p>
-        <div class="log-viewer-toolbar">
-          <DatePicker
-            value={selectedLogDate}
-            onPick={(d) => {
-              selectedLogDate = d;
-              loadAppLogs();
-            }}
-          />
-          <div class="cache-toolbar-spacer"></div>
-          <Popover.Root bind:open={openRefresh}>
-            <Popover.Trigger>
-              <Button variant="outline" size="sm" type="button">
-                <RefreshCw size={14} />
-                <span>{refreshLabel}</span>
-                <ChevronDown size={14} class="refresh-chev" />
-              </Button>
-            </Popover.Trigger>
-            <Popover.Content side="bottom" align="end" sideOffset={6} class="toolbar-menu">
-              {#each refreshItems as it (it.value)}
-                <button
-                  class="toolbar-menu-item"
-                  class:active={appLogRefresh === Number(it.value)}
-                  type="button"
-                  onclick={() => { appLogRefresh = Number(it.value); openRefresh = false; }}
-                >
-                  <span>{it.label}</span>
-                  {#if appLogRefresh === Number(it.value)}
-                    <Check size={13} />
-                  {/if}
-                </button>
-              {/each}
-            </Popover.Content>
-          </Popover.Root>
-        </div>
-        <pre class="log-box mono" bind:this={logBox}>{appLogs || (appLogsBusy ? "正在读取日志…" : "暂无日志")}</pre>
       </section>
     {:else if settingsTab === "cache"}
       <section class="settings-section">

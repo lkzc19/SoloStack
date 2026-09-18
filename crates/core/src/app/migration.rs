@@ -6,10 +6,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
-
 use super::environment::{self, Environment, EnvironmentComponent, SCHEMA_VERSION};
-use super::paths;
+use super::{id, paths};
 
 const LEGACY_ETC_DIR: &str = "etc";
 
@@ -382,7 +380,7 @@ fn scan_legacy_instances(root: &Path) -> Result<Vec<LegacyInstance>, String> {
 }
 
 fn migrate_group(root: &Path, name: &str, group: &[LegacyInstance]) -> Result<Environment, String> {
-    let id = Uuid::new_v4().to_string();
+    let id = id::new_id();
     let environments_root = paths::environments_dir().map_err(|e| e.to_string())?;
     let staging = environments_root.join(format!(".migration-{id}"));
     if staging.exists() {

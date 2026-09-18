@@ -11,9 +11,7 @@ pub fn uninstall(
     keep_data: bool,
 ) -> Result<(), String> {
     let operation = crate::app::app_log::Operation::begin(
-        "uninstall",
-        name,
-        version,
+        environment_id,
         &format!("开始卸载 {name} v{version}（保留数据: {keep_data}）"),
     );
     let result = uninstall_inner(environment_id, name, version, keep_data);
@@ -66,7 +64,7 @@ fn uninstall_inner(
     let mut environment = crate::app::environment::load(environment_id)?;
     environment.remove_component(name)?;
 
-    let _ = crate::app::app_log::info("uninstall.done", &format!("{name} v{version} 已卸载"));
+    let _ = crate::app::app_log::info(&format!("{name} v{version} 已卸载"));
     Ok(())
 }
 
@@ -82,10 +80,9 @@ fn stop_running_processes(environment_id: &str, name: &str, version: &str) {
     if !running {
         return;
     }
-    let _ = crate::app::app_log::info("uninstall.stop.begin", &format!("{name} 仍在运行，先停止"));
+    let _ = crate::app::app_log::info(&format!("{name} 仍在运行，先停止"));
     if let Err(e) = crate::lifecycle::service::stop(environment_id, name, version) {
-        let _ =
-            crate::app::app_log::error("uninstall.stop.failed", &format!("停止 {name} 失败: {e}"));
+        let _ = crate::app::app_log::error(&format!("停止 {name} 失败: {e}"));
     }
 }
 

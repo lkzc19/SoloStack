@@ -16,9 +16,7 @@ pub fn start(environment_id: &str, name: &str, version: &str) -> Result<(), Stri
         return Err("只能启动当前活动环境中的组件".to_string());
     }
     let operation = crate::app::app_log::Operation::begin(
-        "start",
-        name,
-        version,
+        environment_id,
         &format!("启动组件 {name} v{version}"),
     );
     let result = (|| {
@@ -34,9 +32,7 @@ pub fn start(environment_id: &str, name: &str, version: &str) -> Result<(), Stri
 /// 停止组件。
 pub fn stop(environment_id: &str, name: &str, version: &str) -> Result<(), String> {
     let operation = crate::app::app_log::Operation::begin(
-        "stop",
-        name,
-        version,
+        environment_id,
         &format!("停止组件 {name} v{version}"),
     );
     let result = (|| {

@@ -10,6 +10,7 @@ import type {
   EnvironmentInfo,
   InstallProgressPayload,
   Status,
+  SettingsInfo,
   ThemeMode,
   UiComponent,
 } from "./types";
@@ -25,6 +26,7 @@ export const store = $state({
   selectedName: "",
   rootDir: "",
   appVersion: "",
+  showLogsButton: true,
   busy: false,
   busyAction: "", // 当前操作："start" / "stop" / "uninstall" / ""
   busyComponent: "", // 当前操作的组件名
@@ -132,9 +134,14 @@ export function setThemeMode(mode: ThemeMode) {
 export async function boot() {
   initTheme();
   try {
-    store.appVersion = await getVersion();
+    const [version, settings] = await Promise.all([
+      getVersion(),
+      invoke<SettingsInfo>("get_settings"),
+    ]);
+    store.appVersion = version;
+    store.showLogsButton = settings.show_logs_button;
   } catch (e) {
-    store.errorMsg = `读取应用版本失败: ${e}`;
+    store.errorMsg = `读取应用信息失败: ${e}`;
   }
   await loadMain();
 }

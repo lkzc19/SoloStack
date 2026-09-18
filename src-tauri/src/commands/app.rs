@@ -27,6 +27,7 @@ pub fn get_settings() -> Result<SettingsInfo, String> {
         data_root: root.display().to_string(),
         log_viewer: settings.log.viewer,
         close_to_tray: settings.close_to_tray,
+        show_logs_button: settings.show_logs_button,
         log_level: settings.log.level,
         log_retention_days: settings.log.retention_days,
         log_max_total_mb: settings.log.max_total_mb,
@@ -78,6 +79,15 @@ pub fn set_close_to_tray(close_to_tray: bool) -> Result<(), String> {
     let mut settings =
         solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     settings.close_to_tray = close_to_tray;
+    settings.save().map_err(|e| e.to_string())
+}
+
+/// 设置主页是否显示实时日志入口。
+#[tauri::command]
+pub fn set_show_logs_button(show_logs_button: bool) -> Result<(), String> {
+    let mut settings =
+        solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
+    settings.show_logs_button = show_logs_button;
     settings.save().map_err(|e| e.to_string())
 }
 
@@ -152,6 +162,7 @@ pub struct SettingsInfo {
     data_root: String,
     log_viewer: String,
     close_to_tray: bool,
+    show_logs_button: bool,
     log_level: String,
     log_retention_days: u32,
     log_max_total_mb: u64,

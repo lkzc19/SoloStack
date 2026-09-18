@@ -59,6 +59,10 @@
     goto("/settings");
   }
 
+  function openLogs() {
+    goto("/logs");
+  }
+
   function openInstall() {
     goto("/install");
   }
@@ -80,9 +84,16 @@
   <div class="brand">
     <span class="brand-name">SoloStack</span>
   </div>
-  <button class="gear-btn ghost" onclick={openSettings} aria-label="设置">
-    <Settings size={16} />
-  </button>
+  <div class="topbar-system-actions">
+    <button class="gear-btn ghost" onclick={openSettings} aria-label="设置">
+      <Settings size={16} />
+    </button>
+    {#if store.showLogsButton}
+      <button class="gear-btn ghost" onclick={openLogs} aria-label="日志">
+        <FileText size={16} />
+      </button>
+    {/if}
+  </div>
   <div class="topbar-spacer"></div>
   {#if store.installing}
     <button class="add-btn progress" onclick={openInstallProgress} aria-label="查看安装进度">

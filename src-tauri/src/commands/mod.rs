@@ -6,6 +6,7 @@ pub mod app;
 pub mod component;
 pub mod environment;
 pub mod install;
+pub mod log_stream;
 pub mod logs;
 
 use solostack_core::component::instances;

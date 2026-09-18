@@ -4,9 +4,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use super::{paths, settings::Settings};
+use super::{id, paths, settings::Settings};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 const MAX_NAME_CHARS: usize = 40;
@@ -43,9 +42,11 @@ fn now() -> String {
 }
 
 fn validate_id(id: &str) -> Result<(), String> {
-    Uuid::parse_str(id)
-        .map(|_| ())
-        .map_err(|_| format!("无效的环境 ID: {id}"))
+    if super::id::is_environment_id(id) {
+        Ok(())
+    } else {
+        Err(format!("无效的环境 ID: {id}"))
+    }
 }
 
 fn normalize_name(name: &str) -> Result<String, String> {
@@ -118,7 +119,7 @@ pub fn list() -> Result<Vec<Environment>, String> {
             continue;
         }
         let id = entry.file_name().to_string_lossy().to_string();
-        if Uuid::parse_str(&id).is_err() {
+        if !super::id::is_environment_id(&id) {
             continue;
         }
         environments.push(load(&id)?);
@@ -133,7 +134,7 @@ pub fn create(name: &str) -> Result<Environment, String> {
     ensure_name_available(&name, None)?;
     paths::ensure_app_dirs().map_err(|e| e.to_string())?;
 
-    let id = Uuid::new_v4().to_string();
+    let id = id::new_id();
     paths::ensure_environment_dirs(&id).map_err(|e| e.to_string())?;
     let timestamp = now();
     let environment = Environment {
@@ -337,7 +338,7 @@ mod tests {
         let tmp = setup("create");
 
         let environment = create("开发环境").unwrap();
-        assert!(Uuid::parse_str(&environment.id).is_ok());
+        assert!(id::is_short_id(&environment.id));
         assert_eq!(list().unwrap().len(), 1);
         assert_eq!(load(&environment.id).unwrap().name, "开发环境");
 

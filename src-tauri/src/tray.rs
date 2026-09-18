@@ -104,7 +104,7 @@ fn hide_main_window_result<R: Runtime>(app: &AppHandle<R>) -> Result<(), String>
 
 fn report_tray_error(message: &str) {
     eprintln!("{message}");
-    let _ = solostack_core::app::app_log::error("tray.error", message);
+    let _ = solostack_core::app::app_log::error(message);
 }
 
 #[cfg(test)]
@@ -122,7 +122,7 @@ mod tests {
         let logs =
             solostack_core::app::app_log::read_logs_for(&solostack_core::app::app_log::today())
                 .unwrap();
-        assert!(logs.contains("ERROR 测试托盘错误"), "{logs}");
+        assert!(logs.contains("ERROR [-] 测试托盘错误"), "{logs}");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

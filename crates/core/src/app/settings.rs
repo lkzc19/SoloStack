@@ -10,6 +10,8 @@ use crate::app::paths;
 pub struct Settings {
     /// 点击关闭按钮时是否仅隐藏窗口并保留托盘进程。
     pub close_to_tray: bool,
+    /// 是否在主页顶部显示实时日志入口。
+    pub show_logs_button: bool,
     /// 环境相关设置。
     pub environment: EnvironmentSettings,
     /// 应用诊断日志配置。
@@ -56,6 +58,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             close_to_tray: default_close_to_tray(),
+            show_logs_button: default_show_logs_button(),
             environment: EnvironmentSettings::default(),
             log: LogSettings::default(),
         }
@@ -67,6 +70,8 @@ impl Default for Settings {
 struct SettingsWire {
     #[serde(default = "default_close_to_tray")]
     close_to_tray: bool,
+    #[serde(default = "default_show_logs_button")]
+    show_logs_button: bool,
     #[serde(default)]
     environment: Option<EnvironmentSettings>,
     #[serde(default)]
@@ -108,6 +113,7 @@ impl<'de> Deserialize<'de> for Settings {
 
         Ok(Self {
             close_to_tray: wire.close_to_tray,
+            show_logs_button: wire.show_logs_button,
             environment: wire.environment.unwrap_or_default(),
             log,
         })
@@ -119,6 +125,10 @@ fn default_log_viewer() -> String {
 }
 
 fn default_close_to_tray() -> bool {
+    true
+}
+
+fn default_show_logs_button() -> bool {
     true
 }
 
@@ -172,6 +182,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.log.viewer, "com.apple.TextEdit");
         assert!(s.close_to_tray, "默认关闭窗口时最小化到托盘");
+        assert!(s.show_logs_button, "默认显示实时日志入口");
         assert_eq!(s.log.level, default_log_level());
         assert_eq!(s.log.retention_days, 7);
         assert_eq!(s.log.max_total_mb, 1024);
@@ -187,6 +198,7 @@ mod tests {
 
         let s = Settings {
             close_to_tray: false,
+            show_logs_button: false,
             environment: EnvironmentSettings {
                 active_id: Some("environment-id".to_string()),
             },

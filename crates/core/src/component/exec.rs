@@ -3,13 +3,12 @@
 //! 分工：`platform::process` 只会拉进程/取输出，组件相关的环境注入（JAVA_HOME、
 //! 以及调用方给的 HADOOP_CONF_DIR 之类）在这一层完成。
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use super::Component;
-use crate::app::app_log::{self, LogLevel, LogSource};
+use crate::app::app_log;
 use crate::app::paths;
 use crate::package::manifest;
 use crate::platform::{jdk, process};
@@ -29,24 +28,11 @@ pub fn run_checked(
     let (dir, envs) = prepare(environment_id, comp, version, envs)?;
     let refs = as_refs(&envs);
     let context = app_log::current_context();
-    let mut fields = BTreeMap::new();
-    fields.insert("cwd".to_string(), dir.display().to_string());
-    fields.insert("script".to_string(), script.to_string());
-    fields.insert(
-        "args".to_string(),
-        format!("{:?}", app_log::redact_args(args)),
-    );
-    fields.insert("timeout_ms".to_string(), timeout.as_millis().to_string());
-    for (key, value) in loggable_envs(&envs) {
-        fields.insert(format!("env.{key}"), value);
-    }
-    let _ = app_log::log(
-        LogLevel::Debug,
-        LogSource::Process,
-        "script.begin",
-        &format!("执行脚本 {script}"),
-        fields,
-    );
+    let args_label = app_log::redact_args(args).join(" ");
+    let _ = app_log::debug(&format!(
+        "执行脚本 {script} {args_label}（超时 {} ms）",
+        timeout.as_millis()
+    ));
 
     let observer_context = context.clone();
     let observer: process::ScriptOutputObserver = Arc::new(move |stream, text| {
@@ -59,45 +45,23 @@ pub fn run_checked(
     let started = std::time::Instant::now();
     let result =
         process::run_script_in_with_observer(&dir, script, args, &refs, timeout, Some(observer));
-    let mut result_fields = BTreeMap::new();
-    result_fields.insert(
-        "duration_ms".to_string(),
-        started.elapsed().as_millis().to_string(),
-    );
     match &result {
         Ok(output) => {
-            result_fields.insert(
-                "exit_code".to_string(),
-                output
-                    .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
-            );
-            let _ = app_log::log(
-                LogLevel::Debug,
-                LogSource::Process,
-                "script.end",
-                &format!("脚本 {script} 执行完成"),
-                result_fields,
-            );
+            let exit = output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let _ = app_log::debug(&format!(
+                "脚本 {script} 执行完成（exit={exit}，耗时 {} ms）",
+                started.elapsed().as_millis()
+            ));
         }
         Err(error) => {
-            result_fields.insert(
-                "error".to_string(),
-                app_log::redact_args(&[error]).remove(0),
-            );
-            if error.contains("超时") {
-                result_fields.insert("timeout".to_string(), "true".to_string());
-                result_fields.insert("process_group_killed".to_string(), "true".to_string());
-            }
-            let _ = app_log::log(
-                LogLevel::Error,
-                LogSource::Process,
-                "script.failed",
-                &format!("脚本 {script} 执行失败"),
-                result_fields,
-            );
+            let _ = app_log::error(&format!(
+                "脚本 {script} 执行失败：{error}（耗时 {} ms）",
+                started.elapsed().as_millis()
+            ));
         }
     }
     result
@@ -141,13 +105,6 @@ fn prepare(
 
 fn as_refs(envs: &[(String, String)]) -> Vec<(&str, &str)> {
     envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
-}
-
-fn loggable_envs(envs: &[(String, String)]) -> Vec<(String, String)> {
-    envs.iter()
-        .filter(|(key, _)| matches!(key.as_str(), "JAVA_HOME" | "HADOOP_CONF_DIR"))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
 }
 
 /// 解析用户显式指定的 JDK（目录名或版本号），找不到时报错。

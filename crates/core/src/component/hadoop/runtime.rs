@@ -182,10 +182,7 @@ fn format_namenode_if_needed(environment_id: &str, version: &str) -> Result<(), 
         ));
     }
     println!("首次使用，格式化 NameNode...");
-    let _ = crate::app::app_log::info(
-        "init.hadoop.format",
-        &format!("首次启动 {NAME} v{version}，格式化 NameNode"),
-    );
+    let _ = crate::app::app_log::info(&format!("首次启动 {NAME} v{version}，格式化 NameNode"));
 
     run_command(
         environment_id,

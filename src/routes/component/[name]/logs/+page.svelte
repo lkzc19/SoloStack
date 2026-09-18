@@ -1,8 +1,9 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { openPath } from "@tauri-apps/plugin-opener";
-  import { ExternalLink, Folder } from "lucide-svelte";
+  import { ExternalLink, Folder, Play } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
   import { store, basename, getSelected } from "$lib/stores.svelte.ts";
@@ -74,6 +75,16 @@
       store.errorMsg = String(e);
     }
   }
+
+  async function openLiveLog(path: string) {
+    const params = new URLSearchParams({
+      source: "component",
+      environmentId: store.activeEnvironmentId,
+      component: name,
+      path,
+    });
+    await goto(`/logs?${params.toString()}`);
+  }
 </script>
 
 <PageHeader title={`${selected?.display_name || store.selectedName} · 日志`} />
@@ -108,10 +119,17 @@
       <div class="logs-card">
         {#each filteredLogs as f (f.path)}
           <div class="log-file-item">
+            <span class="log-file-name mono">{f.name}</span>
+            <button
+              class="log-open-btn"
+              onclick={() => openLiveLog(f.path)}
+              title="查看日志"
+            >
+              <Play size={14} />
+            </button>
             <button class="log-open-btn" onclick={() => openLogFile(f.path)} title="打开">
               <ExternalLink size={14} />
             </button>
-            <span class="log-file-name mono">{f.name}</span>
           </div>
         {/each}
       </div>

@@ -12,7 +12,7 @@ use tauri::Emitter;
 use super::resolve;
 
 /// 当前进行中的安装取消标志（同一时刻至多一个安装）。
-static CANCEL_INSTALL: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static CANCEL_INSTALL: Mutex<Option<Arc<install::InstallCancel>>> = Mutex::new(None);
 static INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct InstallRunningGuard;
@@ -55,7 +55,7 @@ pub async fn install_component(
     let guard = lock::begin_environment_operation(&environment_id)?;
 
     // 取消标志：注册到全局，供 `cancel_install` 命令触发
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(install::InstallCancel::default());
     *CANCEL_INSTALL.lock().unwrap() = Some(cancel.clone());
 
     // 进度回调 → 推送到前端 "install-progress" 事件
@@ -115,7 +115,7 @@ pub fn cancel_install() -> Result<(), String> {
     let guard = CANCEL_INSTALL.lock().unwrap();
     match guard.as_ref() {
         Some(c) => {
-            c.store(true, Ordering::SeqCst);
+            c.cancel("user");
             Ok(())
         }
         None => Err("当前没有进行中的安装".to_string()),

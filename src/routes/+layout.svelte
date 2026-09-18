@@ -3,20 +3,40 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { boot, refreshComponents, handleInstallProgress } from "$lib/stores.svelte.ts";
-  import type { InstallProgressPayload } from "$lib/types";
+  import {
+    handleLogStreamBatch,
+    handleLogStreamStatus,
+    stopLogStream,
+  } from "$lib/log-stream.svelte.ts";
+  import type {
+    InstallProgressPayload,
+    LogStreamBatch,
+    LogStreamStatus,
+  } from "$lib/types";
 
   let { children } = $props();
 
   onMount(() => {
     boot();
     const pollTimer = setInterval(refreshComponents, 10000);
-    let unlisten: (() => void) | undefined;
+    let unlistenInstall: (() => void) | undefined;
+    let unlistenBatch: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
     listen<InstallProgressPayload>("install-progress", (e) =>
       handleInstallProgress(e.payload)
-    ).then((u) => (unlisten = u));
+    ).then((u) => (unlistenInstall = u));
+    listen<LogStreamBatch>("logs-stream://batch", (e) =>
+      handleLogStreamBatch(e.payload)
+    ).then((u) => (unlistenBatch = u));
+    listen<LogStreamStatus>("logs-stream://status", (e) =>
+      handleLogStreamStatus(e.payload)
+    ).then((u) => (unlistenStatus = u));
     return () => {
       clearInterval(pollTimer);
-      unlisten?.();
+      void stopLogStream();
+      unlistenInstall?.();
+      unlistenBatch?.();
+      unlistenStatus?.();
     };
   });
 </script>
