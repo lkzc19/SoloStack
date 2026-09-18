@@ -5,5 +5,6 @@
 pub mod app_log;
 pub mod environment;
 pub mod environment_usage;
+pub mod migration;
 pub mod paths;
 pub mod settings;

@@ -7,6 +7,9 @@
 //!   --ignored --nocapture --test-threads=1
 //! ```
 //!
+//! 可选的 `SOLOSTACK_SMOKE_CACHE_DIR` 指向已有 `cache/downloads/`，测试会把
+//! 对应安装包预置到临时 HOME，避免重复下载；安装时仍会执行 SHA256 校验。
+//!
 //! 测试使用独立临时 HOME，完整走安装、首启 init、状态、停止、配置修改、
 //! 二次启动、卸载；结束后不会留下实例或常驻进程。
 
@@ -21,7 +24,7 @@ use solostack_core::component::{instances, schema, ConfigFieldUpdate};
 use solostack_core::lifecycle::install;
 use solostack_core::lifecycle::service::{self, Status};
 use solostack_core::lifecycle::uninstall;
-use solostack_core::package::manifest;
+use solostack_core::package::{download, manifest};
 use solostack_core::platform::jdk;
 use solostack_core::platform::process;
 
@@ -58,10 +61,40 @@ fn run_component(name: &str) -> Result<(), String> {
     let source_id =
         std::env::var("SOLOSTACK_SMOKE_SOURCE").unwrap_or_else(|_| "官方源".to_string());
     let mut case = SmokeCase::new(name, &version)?;
+    if let Some(cache_dir) = std::env::var_os("SOLOSTACK_SMOKE_CACHE_DIR") {
+        seed_cache(name, &version, &source_id, Path::new(&cache_dir))?;
+    }
 
     let result = run_lifecycle(&case, &source_id);
     let cleanup = case.cleanup();
     result.and(cleanup)
+}
+
+fn seed_cache(name: &str, version: &str, source_id: &str, cache_dir: &Path) -> Result<(), String> {
+    let artifact = manifest::resolve_artifact(name, source_id, version)?;
+    let target = download::target_path(&artifact.url)?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| format!("无法解析安装包文件名: {}", target.display()))?;
+    let source = cache_dir.join(file_name);
+    if !source.is_file() {
+        return Err(format!(
+            "smoke 缓存中缺少 {}: {}",
+            file_name.to_string_lossy(),
+            source.display()
+        ));
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(&source, &target).map_err(|e| {
+        format!(
+            "复制 smoke 缓存 {} 到 {} 失败: {e}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn run_lifecycle(case: &SmokeCase, source_id: &str) -> Result<(), String> {

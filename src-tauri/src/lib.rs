@@ -23,13 +23,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            if let Err(error) = solostack_core::app::paths::migrate_legacy_layout() {
+            if let Err(error) = solostack_core::app::migration::migrate_app_layout() {
                 let _ = solostack_core::app::app_log::error(
                     "migration.legacy_layout.failed",
                     &format!("旧应用目录迁移失败: {error}"),
                 );
             }
-            if let Err(error) = solostack_core::app::environment::migrate_legacy_layout() {
+            if let Err(error) = solostack_core::app::migration::migrate_environment_layout() {
                 let _ = solostack_core::app::app_log::error(
                     "migration.environment.failed",
                     &format!("环境目录迁移失败: {error}"),

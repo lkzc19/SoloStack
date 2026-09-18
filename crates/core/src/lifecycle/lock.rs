@@ -75,3 +75,56 @@ pub fn begin_environment_switch() -> Result<EnvironmentSwitchGuard, String> {
     state.switching = true;
     Ok(EnvironmentSwitchGuard)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_rejects_environment_operation_until_guard_drops() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+
+        let switch = begin_environment_switch().unwrap();
+        let error = begin_environment_operation("environment-a")
+            .err()
+            .expect("切换期间应拒绝普通环境操作");
+        assert!(error.contains("正在切换环境"), "{error}");
+        drop(switch);
+
+        let operation = begin_environment_operation("environment-a").unwrap();
+        drop(operation);
+    }
+
+    #[test]
+    fn operation_rejects_switch_and_releases_lock_on_drop() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+
+        let operation = begin_environment_operation("environment-a").unwrap();
+        let error = begin_environment_switch()
+            .err()
+            .expect("环境操作期间应拒绝切换");
+        assert!(error.contains("正在执行其他操作"), "{error}");
+        drop(operation);
+
+        let switch = begin_environment_switch().unwrap();
+        drop(switch);
+    }
+
+    #[test]
+    fn environment_operation_lock_is_scoped_to_one_environment() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+
+        let first = begin_environment_operation("environment-a").unwrap();
+        let second = begin_environment_operation("environment-b").unwrap();
+        let error = begin_environment_operation("environment-a")
+            .err()
+            .expect("同一环境不能并发执行操作");
+        assert!(error.contains("当前环境正在执行其他操作"), "{error}");
+
+        drop(second);
+        drop(first);
+    }
+}

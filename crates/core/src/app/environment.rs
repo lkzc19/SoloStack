@@ -1,14 +1,14 @@
 //! 环境模型：用户可见名称、稳定环境 ID 和环境内组件清单。
 
-use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{paths, settings::Settings};
 
-const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 1;
 const MAX_NAME_CHARS: usize = 40;
 
 /// 环境中的一个组件实例。同一环境内 component 必须唯一。
@@ -308,435 +308,6 @@ pub fn ensure_initialized() -> Result<Environment, String> {
     Ok(environment)
 }
 
-/// 把旧版全局 `components/` 与 `var/` 迁移到环境目录。
-///
-/// 迁移规则：
-/// - 不同组件、且同组件只有一个版本时，可以一起进入默认环境。
-/// - 同一组件存在多个版本时，额外版本拆到独立环境。
-/// - 使用 staging 目录，失败时回滚已移动路径。
-pub fn migrate_legacy_layout() -> Result<Vec<Environment>, String> {
-    paths::ensure_app_dirs().map_err(|e| e.to_string())?;
-    let root = paths::root_dir().map_err(|e| e.to_string())?;
-    let environments_root = paths::environments_dir().map_err(|e| e.to_string())?;
-    if let Ok(entries) = std::fs::read_dir(&environments_root) {
-        for entry in entries.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".migration-")
-            {
-                recover_stale_migration(&root, &entry.path())?;
-            }
-        }
-    }
-    let instances = scan_legacy_instances(&root)?;
-    let existing = list()?;
-    if !existing.is_empty() {
-        if instances.is_empty() {
-            return Ok(Vec::new());
-        }
-        return Err(
-            "检测到环境目录与旧组件目录同时存在，可能是上次迁移未完成；请保留数据并检查迁移日志"
-                .to_string(),
-        );
-    }
-    if instances.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for instance in instances {
-        grouped
-            .entry(instance.component)
-            .or_default()
-            .push(instance.version);
-    }
-
-    let mut groups: Vec<Vec<LegacyInstance>> = vec![Vec::new()];
-    for (component, mut versions) in grouped {
-        versions.sort();
-        versions.dedup();
-        let mut versions = versions.into_iter();
-        if let Some(first) = versions.next() {
-            groups[0].push(LegacyInstance {
-                component: component.clone(),
-                version: first,
-            });
-        }
-        for version in versions {
-            groups.push(vec![LegacyInstance {
-                component: component.clone(),
-                version,
-            }]);
-        }
-    }
-    groups.retain(|group| !group.is_empty());
-
-    let mut migrated = Vec::new();
-    for (index, group) in groups.into_iter().enumerate() {
-        let name = if index == 0 {
-            "默认环境".to_string()
-        } else if group.len() == 1 {
-            format!("{} {}", group[0].component, group[0].version)
-        } else {
-            format!("迁移环境 {}", index + 1)
-        };
-        match migrate_group(&root, &name, &group) {
-            Ok(environment) => migrated.push(environment),
-            Err(error) => {
-                let mut rollback_errors = Vec::new();
-                for environment in migrated.iter().rev() {
-                    if let Err(rollback_error) = rollback_migrated_environment(&root, environment) {
-                        rollback_errors.push(rollback_error);
-                    }
-                }
-                if rollback_errors.is_empty() {
-                    return Err(error);
-                }
-                return Err(format!(
-                    "{error}；迁移回滚失败: {}",
-                    rollback_errors.join("；")
-                ));
-            }
-        }
-    }
-
-    if let Some(first) = migrated.first() {
-        set_active_id(Some(&first.id))?;
-    }
-    Ok(migrated)
-}
-
-fn rollback_migrated_environment(root: &Path, environment: &Environment) -> Result<(), String> {
-    for item in &environment.components {
-        let instance_name = paths::instance_dir_name(&item.component, &item.version);
-        restore_move(
-            &paths::instance_dir(&environment.id, &item.component, &item.version)
-                .map_err(|e| e.to_string())?,
-            &root
-                .join(paths::COMPONENTS_DIR)
-                .join(&item.component)
-                .join(&instance_name),
-        )?;
-        for kind in [paths::VAR_DATA_DIR, paths::VAR_LOG_DIR] {
-            restore_move(
-                &paths::var_dir(&environment.id)
-                    .map_err(|e| e.to_string())?
-                    .join(kind)
-                    .join(&item.component)
-                    .join(&instance_name),
-                &root
-                    .join(paths::VAR_DIR)
-                    .join(kind)
-                    .join(&item.component)
-                    .join(&instance_name),
-            )?;
-        }
-        restore_move(
-            &paths::runtime_file(&environment.id, &item.component, &item.version)
-                .map_err(|e| e.to_string())?,
-            &root
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(format!("{instance_name}.json")),
-        )?;
-        restore_move(
-            &paths::var_run_instance_dir(&environment.id, &item.component, &item.version)
-                .map_err(|e| e.to_string())?,
-            &root
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(&item.component)
-                .join(&instance_name),
-        )?;
-    }
-    std::fs::remove_dir_all(directory(&environment.id)?)
-        .map_err(|e| format!("删除已回滚迁移环境失败: {e}"))
-}
-
-/// 恢复上一次异常退出留下的 staging 目录。
-///
-/// staging 中的组件目录结构足以反推出原始位置；只要目标位置不存在，就把数据移回，
-/// 绝不直接删除 staging，避免崩溃恢复时丢数据。
-fn recover_stale_migration(root: &Path, staging: &Path) -> Result<(), String> {
-    let components_root = staging.join(paths::COMPONENTS_DIR);
-    if components_root.is_dir() {
-        for component_entry in
-            std::fs::read_dir(&components_root).map_err(|e| format!("读取迁移残留目录失败: {e}"))?
-        {
-            let component_entry = component_entry.map_err(|e| e.to_string())?;
-            if !component_entry.path().is_dir() {
-                continue;
-            }
-            let component = component_entry.file_name().to_string_lossy().to_string();
-            let prefix = format!("{component}-");
-            for instance_entry in
-                std::fs::read_dir(component_entry.path()).map_err(|e| e.to_string())?
-            {
-                let instance_entry = instance_entry.map_err(|e| e.to_string())?;
-                if !instance_entry.path().is_dir() {
-                    continue;
-                }
-                let instance_name = instance_entry.file_name().to_string_lossy().to_string();
-                let Some(version) = instance_name.strip_prefix(&prefix) else {
-                    continue;
-                };
-                if version.is_empty() {
-                    continue;
-                }
-
-                restore_move(
-                    &component_entry.path().join(&instance_name),
-                    &root
-                        .join(paths::COMPONENTS_DIR)
-                        .join(&component)
-                        .join(&instance_name),
-                )?;
-                for kind in [paths::VAR_DATA_DIR, paths::VAR_LOG_DIR] {
-                    restore_move(
-                        &staging
-                            .join(paths::VAR_DIR)
-                            .join(kind)
-                            .join(&component)
-                            .join(&instance_name),
-                        &root
-                            .join(paths::VAR_DIR)
-                            .join(kind)
-                            .join(&component)
-                            .join(&instance_name),
-                    )?;
-                }
-                restore_move(
-                    &staging
-                        .join(paths::VAR_DIR)
-                        .join(paths::VAR_RUN_DIR)
-                        .join(format!("{instance_name}.json")),
-                    &root
-                        .join(paths::VAR_DIR)
-                        .join(paths::VAR_RUN_DIR)
-                        .join(format!("{instance_name}.json")),
-                )?;
-                restore_move(
-                    &staging
-                        .join(paths::VAR_DIR)
-                        .join(paths::VAR_RUN_DIR)
-                        .join(&component)
-                        .join(&instance_name),
-                    &root
-                        .join(paths::VAR_DIR)
-                        .join(paths::VAR_RUN_DIR)
-                        .join(&component)
-                        .join(&instance_name),
-                )?;
-            }
-        }
-    }
-    std::fs::remove_dir_all(staging)
-        .map_err(|e| format!("清理迁移残留目录 {} 失败: {e}", staging.display()))
-}
-
-fn restore_move(staged: &Path, original: &Path) -> Result<(), String> {
-    if !staged.exists() {
-        return Ok(());
-    }
-    if original.exists() {
-        return Err(format!(
-            "迁移恢复冲突，源路径和目标路径同时存在: {} / {}",
-            original.display(),
-            staged.display()
-        ));
-    }
-    if let Some(parent) = original.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建迁移恢复目录 {} 失败: {e}", parent.display()))?;
-    }
-    std::fs::rename(staged, original).map_err(|e| {
-        format!(
-            "恢复迁移路径 {} 到 {} 失败: {e}",
-            staged.display(),
-            original.display()
-        )
-    })
-}
-
-#[derive(Debug, Clone)]
-struct LegacyInstance {
-    component: String,
-    version: String,
-}
-
-fn scan_legacy_instances(root: &Path) -> Result<Vec<LegacyInstance>, String> {
-    let components_root = root.join(paths::COMPONENTS_DIR);
-    if !components_root.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut instances = Vec::new();
-    for component_entry in
-        std::fs::read_dir(&components_root).map_err(|e| format!("读取旧组件目录失败: {e}"))?
-    {
-        let component_entry = component_entry.map_err(|e| e.to_string())?;
-        if !component_entry.path().is_dir() {
-            continue;
-        }
-        let component = component_entry.file_name().to_string_lossy().to_string();
-        let prefix = format!("{component}-");
-        for version_entry in std::fs::read_dir(component_entry.path())
-            .map_err(|e| format!("读取旧组件 {} 目录失败: {e}", component))?
-        {
-            let version_entry = version_entry.map_err(|e| e.to_string())?;
-            if !version_entry.path().is_dir() {
-                continue;
-            }
-            let directory_name = version_entry.file_name().to_string_lossy().to_string();
-            if let Some(version) = directory_name.strip_prefix(&prefix) {
-                if !version.is_empty() {
-                    instances.push(LegacyInstance {
-                        component: component.clone(),
-                        version: version.to_string(),
-                    });
-                }
-            }
-        }
-    }
-    Ok(instances)
-}
-
-fn migrate_group(root: &Path, name: &str, group: &[LegacyInstance]) -> Result<Environment, String> {
-    let id = Uuid::new_v4().to_string();
-    let environments_root = paths::environments_dir().map_err(|e| e.to_string())?;
-    let staging = environments_root.join(format!(".migration-{id}"));
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
-    }
-    for dir in [
-        staging.join(paths::COMPONENTS_DIR),
-        staging.join(paths::VAR_DIR).join(paths::VAR_DATA_DIR),
-        staging.join(paths::VAR_DIR).join(paths::VAR_LOG_DIR),
-        staging.join(paths::VAR_DIR).join(paths::VAR_RUN_DIR),
-    ] {
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| format!("创建迁移目录 {} 失败: {e}", dir.display()))?;
-    }
-
-    let mut moves = Vec::new();
-    let result = (|| {
-        for instance in group {
-            let instance_name = paths::instance_dir_name(&instance.component, &instance.version);
-            let old_component = root
-                .join(paths::COMPONENTS_DIR)
-                .join(&instance.component)
-                .join(&instance_name);
-            let new_component = staging
-                .join(paths::COMPONENTS_DIR)
-                .join(&instance.component)
-                .join(&instance_name);
-            move_if_exists(&old_component, &new_component, &mut moves)?;
-
-            for kind in [paths::VAR_DATA_DIR, paths::VAR_LOG_DIR] {
-                let old = root
-                    .join(paths::VAR_DIR)
-                    .join(kind)
-                    .join(&instance.component)
-                    .join(&instance_name);
-                let new = staging
-                    .join(paths::VAR_DIR)
-                    .join(kind)
-                    .join(&instance.component)
-                    .join(&instance_name);
-                move_if_exists(&old, &new, &mut moves)?;
-            }
-
-            let old_runtime = root
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(format!("{instance_name}.json"));
-            let new_runtime = staging
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(format!("{instance_name}.json"));
-            move_if_exists(&old_runtime, &new_runtime, &mut moves)?;
-
-            let old_pid_dir = root
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(&instance.component)
-                .join(&instance_name);
-            let new_pid_dir = staging
-                .join(paths::VAR_DIR)
-                .join(paths::VAR_RUN_DIR)
-                .join(&instance.component)
-                .join(&instance_name);
-            move_if_exists(&old_pid_dir, &new_pid_dir, &mut moves)?;
-        }
-
-        let timestamp = now();
-        let environment = Environment {
-            schema_version: SCHEMA_VERSION,
-            id: id.clone(),
-            name: name.to_string(),
-            components: group
-                .iter()
-                .map(|instance| EnvironmentComponent {
-                    component: instance.component.clone(),
-                    version: instance.version.clone(),
-                    installed_at: timestamp.clone(),
-                })
-                .collect(),
-            created_at: timestamp.clone(),
-            updated_at: timestamp,
-            last_activated_at: None,
-        };
-        validate_components(&environment.components)?;
-        let content = serde_json::to_string_pretty(&environment)
-            .map_err(|e| format!("序列化迁移环境失败: {e}"))?;
-        std::fs::write(staging.join(paths::ENVIRONMENT_FILE), content)
-            .map_err(|e| format!("写入迁移环境元数据失败: {e}"))?;
-        let final_dir = paths::environment_dir(&id).map_err(|e| e.to_string())?;
-        std::fs::rename(&staging, &final_dir)
-            .map_err(|e| format!("提交迁移环境 {} 失败: {e}", final_dir.display()))?;
-        Ok(environment)
-    })();
-
-    if result.is_err() {
-        for (source, destination) in moves.into_iter().rev() {
-            if destination.exists() && !source.exists() {
-                if let Some(parent) = source.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::rename(destination, source);
-            }
-        }
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    result
-}
-
-fn move_if_exists(
-    source: &Path,
-    destination: &Path,
-    moves: &mut Vec<(PathBuf, PathBuf)>,
-) -> Result<(), String> {
-    if !source.exists() {
-        return Ok(());
-    }
-    if destination.exists() {
-        return Err(format!("迁移目标已存在: {}", destination.display()));
-    }
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("创建迁移目标目录 {} 失败: {e}", parent.display()))?;
-    }
-    std::fs::rename(source, destination).map_err(|e| {
-        format!(
-            "迁移 {} 到 {} 失败: {e}",
-            source.display(),
-            destination.display()
-        )
-    })?;
-    moves.push((source.to_path_buf(), destination.to_path_buf()));
-    Ok(())
-}
-
 /// 校验一组组件清单中 component 不重复。
 pub fn validate_components(components: &[EnvironmentComponent]) -> Result<(), String> {
     let mut seen = HashSet::new();
@@ -805,65 +376,35 @@ mod tests {
     }
 
     #[test]
-    fn legacy_components_migrate_into_one_environment_when_versions_are_unique() {
+    fn deleting_one_environment_does_not_affect_another() {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = setup("legacy-unique");
-        let root = tmp.join(paths::ROOT_DIR_NAME);
-        std::fs::create_dir_all(root.join("components/hadoop/hadoop-3.5.0")).unwrap();
-        std::fs::create_dir_all(root.join("components/kafka/kafka-4.3.1")).unwrap();
-        std::fs::create_dir_all(root.join("var/data/hadoop/hadoop-3.5.0")).unwrap();
-        std::fs::write(root.join("var/data/hadoop/hadoop-3.5.0/value"), "data").unwrap();
+        let tmp = setup("delete-isolation");
 
-        let migrated = migrate_legacy_layout().unwrap();
-        assert_eq!(migrated.len(), 1);
-        assert_eq!(migrated[0].components.len(), 2);
-        assert!(paths::instance_dir(&migrated[0].id, "hadoop", "3.5.0")
-            .unwrap()
-            .is_dir());
-        assert!(
-            paths::var_data_instance_dir(&migrated[0].id, "hadoop", "3.5.0")
-                .unwrap()
-                .join("value")
-                .is_file()
-        );
+        let mut first = create("环境 A").unwrap();
+        first.register_component("hadoop", "3.5.0").unwrap();
+        let mut second = create("环境 B").unwrap();
+        second.register_component("kafka", "4.3.1").unwrap();
+        let first_snapshot = first.clone();
+        let second_id = second.id.clone();
 
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
+        let first_component = paths::instance_dir(&first.id, "hadoop", "3.5.0").unwrap();
+        let first_data = paths::var_data_instance_dir(&first.id, "hadoop", "3.5.0").unwrap();
+        let second_component = paths::instance_dir(&second_id, "kafka", "4.3.1").unwrap();
+        std::fs::create_dir_all(&first_component).unwrap();
+        std::fs::create_dir_all(&first_data).unwrap();
+        std::fs::create_dir_all(&second_component).unwrap();
+        std::fs::write(first_component.join("marker"), "first").unwrap();
+        std::fs::write(first_data.join("marker"), "first-data").unwrap();
+        std::fs::write(second_component.join("marker"), "second").unwrap();
 
-    #[test]
-    fn duplicate_legacy_component_versions_split_into_environments() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = setup("legacy-duplicates");
-        let root = tmp.join(paths::ROOT_DIR_NAME);
-        std::fs::create_dir_all(root.join("components/hadoop/hadoop-3.5.0")).unwrap();
-        std::fs::create_dir_all(root.join("components/hadoop/hadoop-3.4.1")).unwrap();
+        second.delete().unwrap();
 
-        let migrated = migrate_legacy_layout().unwrap();
-        assert_eq!(migrated.len(), 2);
-        assert!(migrated
-            .iter()
-            .all(|environment| environment.components.len() == 1));
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn stale_migration_is_restored_instead_of_deleted() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = setup("stale-migration");
-        let root = tmp.join(paths::ROOT_DIR_NAME);
-        let staging = root.join("environments/.migration-test");
-        let staged_component = staging.join("components/hadoop/hadoop-3.5.0");
-        std::fs::create_dir_all(&staged_component).unwrap();
-        std::fs::write(staged_component.join("marker"), "data").unwrap();
-
-        recover_stale_migration(&root, &staging).unwrap();
-
-        assert!(root.join("components/hadoop/hadoop-3.5.0/marker").is_file());
-        assert!(!staging.exists());
+        assert!(!directory(&second_id).unwrap().exists());
+        assert!(first_component.join("marker").is_file());
+        assert!(first_data.join("marker").is_file());
+        assert_eq!(load(&first.id).unwrap(), first_snapshot);
+        assert_eq!(list().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

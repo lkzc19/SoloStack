@@ -24,9 +24,6 @@ pub const SETTINGS_FILE: &str = "settings.json";
 /// 环境元数据文件名。
 pub const ENVIRONMENT_FILE: &str = "environment.json";
 
-/// 历史目录名（配置副本机制已废弃，仅迁移时清理用）。
-const LEGACY_ETC_DIR: &str = "etc";
-
 /// SoloStack 数据根目录：`~/.solostack/`。
 pub fn root_dir() -> Result<PathBuf, std::io::Error> {
     let home = dirs::home_dir()
@@ -225,76 +222,6 @@ pub fn is_within_environment(environment_id: &str, path: &Path) -> Result<bool, 
     Ok(path.starts_with(environment_dir(environment_id)?))
 }
 
-/// 迁移旧版应用级布局（幂等）：
-/// - 根/旧位置 settings.json → app/settings.json
-/// - 旧应用日志 → app/log/
-/// - 根 downloads/ 与 var/downloads/ → cache/downloads/
-/// - 清理废弃的 installs / etc / snapshots / .templates
-///
-/// 组件、var/data、var/log、var/run 留给环境迁移处理。
-pub fn migrate_legacy_layout() -> Result<(), std::io::Error> {
-    ensure_app_dirs()?;
-    let root = root_dir()?;
-
-    let legacy_settings = root.join(SETTINGS_FILE);
-    if legacy_settings.is_file() {
-        let target = settings_file()?;
-        let target_blank = std::fs::read_to_string(&target)
-            .map(|content| content.trim().is_empty())
-            .unwrap_or(true);
-        if !target.exists() || target_blank {
-            let _ = std::fs::rename(&legacy_settings, &target);
-        }
-    }
-
-    let legacy_app_logs = root.join(VAR_DIR).join("solostack");
-    if legacy_app_logs.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&legacy_app_logs) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let destination = app_log_dir()?.join(entry.file_name());
-                if path.is_file() && !destination.exists() {
-                    let _ = std::fs::rename(&path, destination);
-                }
-            }
-        }
-        let _ = std::fs::remove_dir_all(&legacy_app_logs);
-    }
-
-    for legacy_downloads in [
-        root.join(DOWNLOADS_DIR),
-        root.join(VAR_DIR).join(DOWNLOADS_DIR),
-    ] {
-        if legacy_downloads.is_dir() {
-            let destination = downloads_dir()?;
-            if let Ok(entries) = std::fs::read_dir(&legacy_downloads) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let target = destination.join(entry.file_name());
-                    if !target.exists() {
-                        let _ = std::fs::rename(&path, target);
-                    }
-                }
-            }
-            let _ = std::fs::remove_dir_all(&legacy_downloads);
-        }
-    }
-
-    for dir in [root.join("installs"), root.join(VAR_DIR).join("installs")] {
-        if dir.is_dir() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-    }
-    for legacy in [LEGACY_ETC_DIR, "snapshots", ".templates"] {
-        let path = root.join(legacy);
-        if path.is_dir() {
-            let _ = std::fs::remove_dir_all(&path);
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,38 +284,6 @@ mod tests {
         }
         assert!(downloads_dir().unwrap().is_dir());
 
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn migrate_moves_legacy_app_layout() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("solostack-migrate-test");
-        std::env::set_var("HOME", &tmp);
-        let _ = std::fs::remove_dir_all(&tmp);
-        let root = tmp.join(ROOT_DIR_NAME);
-
-        std::fs::create_dir_all(root.join("downloads")).unwrap();
-        std::fs::create_dir_all(root.join("var/downloads")).unwrap();
-        std::fs::create_dir_all(root.join("var/solostack")).unwrap();
-        std::fs::create_dir_all(root.join("installs")).unwrap();
-        std::fs::create_dir_all(root.join("etc/hadoop/hadoop-3.5.0")).unwrap();
-        std::fs::write(root.join("settings.json"), "{}").unwrap();
-        std::fs::write(root.join("downloads/a.tgz"), "a").unwrap();
-        std::fs::write(root.join("var/downloads/b.tgz"), "b").unwrap();
-        std::fs::write(root.join("var/solostack/solostack.log"), "log").unwrap();
-
-        migrate_legacy_layout().unwrap();
-
-        assert!(settings_file().unwrap().is_file());
-        assert!(downloads_dir().unwrap().join("a.tgz").is_file());
-        assert!(downloads_dir().unwrap().join("b.tgz").is_file());
-        assert!(app_log_dir().unwrap().join("solostack.log").is_file());
-        assert!(!root.join("etc").exists());
-        assert!(!root.join("installs").exists());
-
-        migrate_legacy_layout().unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
