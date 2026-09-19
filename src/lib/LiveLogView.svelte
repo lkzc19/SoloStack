@@ -130,7 +130,7 @@
     overflow: auto;
     border: 1px solid var(--line);
     border-radius: 7px;
-    background: var(--surface);
+    background: var(--panel);
     font-size: 12px;
   }
 

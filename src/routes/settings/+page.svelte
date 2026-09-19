@@ -18,6 +18,7 @@
     ExternalLink,
     HardDrive,
     Monitor,
+    Bell,
     Moon,
     Pencil,
     RefreshCw,
@@ -41,6 +42,7 @@
     switchEnvironment,
     themeState,
   } from "$lib/stores.svelte.ts";
+  import { toastConfig } from "$lib/notifications.svelte.ts";
   import type {
     AppDef,
     DownloadPackageInfo,
@@ -56,6 +58,7 @@
   let loggingLevel = $state("info");
   let logRetentionDays = $state(7);
   let logMaxTotalMb = $state(1024);
+  let notificationTypes = $state<string[]>(["component_start", "component_stop"]);
   let openAdvancedSection = $state<string | null>(null);
   let cachePackages = $state<DownloadPackageInfo[]>([]);
   let cacheSelected = $state<Set<string>>(new Set());
@@ -64,6 +67,7 @@
   let logViewer = $state("");
   let closeToTray = $state(true);
   let showLogsButton = $state(true);
+  let showNotificationsButton = $state(true);
   let openEditor = $state(false);
   let updateStatus = $state<
     "idle" | "checking" | "up-to-date" | "available" | "downloading" | "installing" | "error"
@@ -115,9 +119,13 @@
       logViewer = settingsInfo.log_viewer;
       closeToTray = settingsInfo.close_to_tray;
       showLogsButton = settingsInfo.show_logs_button;
+      showNotificationsButton = settingsInfo.show_notifications_button;
       loggingLevel = settingsInfo.log_level;
       logRetentionDays = settingsInfo.log_retention_days;
       logMaxTotalMb = settingsInfo.log_max_total_mb;
+      notificationTypes = settingsInfo.notification_types;
+      toastConfig.dismissMs = settingsInfo.toast_dismiss_ms;
+      toastConfig.position = settingsInfo.toast_position;
       await loadApps();
     } catch (e) {
       store.errorMsg = String(e);
@@ -150,6 +158,19 @@
       flashSuccess("窗口行为已更新");
     } catch (e) {
       closeToTray = previous;
+      store.errorMsg = String(e);
+    }
+  }
+
+  async function changeShowNotificationsButton(value: boolean) {
+    const previous = showNotificationsButton;
+    showNotificationsButton = value;
+    try {
+      await invoke("set_show_notifications_button", { showNotificationsButton: value });
+      store.showNotificationsButton = value;
+      flashSuccess("通知入口设置已更新");
+    } catch (e) {
+      showNotificationsButton = previous;
       store.errorMsg = String(e);
     }
   }
@@ -350,6 +371,28 @@
     }
   }
 
+
+  async function saveNotificationSettings() {
+    try {
+      await invoke("set_notification_settings", {
+        notificationTypes,
+        toastDismissMs: toastConfig.dismissMs,
+        toastPosition: toastConfig.position,
+      });
+      flashSuccess("通知设置已更新");
+    } catch (e) {
+      store.errorMsg = String(e);
+    }
+  }
+
+  function toggleNotificationType(type: string) {
+    if (notificationTypes.includes(type)) {
+      notificationTypes = notificationTypes.filter((t) => t !== type);
+    } else {
+      notificationTypes = [...notificationTypes, type];
+    }
+    saveNotificationSettings();
+  }
   function toggleAdvancedSection(section: string) {
     openAdvancedSection = openAdvancedSection === section ? null : section;
   }
@@ -558,6 +601,24 @@
             checked={showLogsButton}
             onCheckedChange={changeShowLogsButton}
             label="显示日志入口"
+          />
+        </div>
+        <div class="settings-toggle-row">
+          <div class="settings-toggle-content">
+            <span class="settings-toggle-icon">
+              <Bell size={17} aria-hidden="true" />
+            </span>
+            <div class="settings-toggle-copy">
+              <div class="settings-toggle-label">显示通知入口</div>
+              <p class="settings-toggle-desc">
+                在主页顶部设置按钮右侧显示通知按钮。
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={showNotificationsButton}
+            onCheckedChange={changeShowNotificationsButton}
+            label="显示通知入口"
           />
         </div>
       </section>
@@ -933,6 +994,92 @@
                       <span>MB</span>
                     </span>
                   </label>
+                </div>
+              </div>
+            {/if}
+          </div>
+          <div
+            class="settings-accordion"
+            class:open={openAdvancedSection === "notification"}
+          >
+            <button
+              class="settings-accordion-header"
+              type="button"
+              aria-expanded={openAdvancedSection === "notification"}
+              onclick={() => toggleAdvancedSection("notification")}
+            >
+              <span class="settings-accordion-copy">
+                <span class="settings-field-title">通知</span>
+                <span class="settings-field-desc">设置通知类型、弹窗行为和显示位置。</span>
+              </span>
+              <ChevronDown size={16} class="settings-accordion-chevron" />
+            </button>
+            {#if openAdvancedSection === "notification"}
+              <div class="settings-accordion-content">
+                <div class="settings-accordion-field-row">
+                  <div class="settings-field-copy">
+                    <div class="settings-accordion-label">自动关闭</div>
+                    <p class="settings-field-desc">通知弹窗显示时长</p>
+                  </div>
+                  <Select
+                    class="notif-select"
+                    value={toastConfig.dismissMs === 0 ? "0" : String(toastConfig.dismissMs / 1000)}
+                    items={[
+                      { value: "3", label: "3 秒" },
+                      { value: "5", label: "5 秒" },
+                      { value: "8", label: "8 秒" },
+                      { value: "0", label: "不自动关闭" },
+                    ]}
+                    size="sm"
+                    onSelect={(value) => {
+                      toastConfig.dismissMs = Number(value) * 1000;
+                      saveNotificationSettings();
+                    }}
+                  />
+                </div>
+                <div class="settings-accordion-field-row">
+                  <div class="settings-field-copy">
+                    <div class="settings-accordion-label">弹出位置</div>
+                    <p class="settings-field-desc">通知弹窗在屏幕上的显示位置</p>
+                  </div>
+                  <Select
+                    class="notif-select"
+                    value={toastConfig.position}
+                    items={[
+                      { value: "top-right", label: "右上" },
+                      { value: "bottom-left", label: "左下" },
+                      { value: "bottom-right", label: "右下" },
+                    ]}
+                    size="sm"
+                    onSelect={(value) => {
+                      toastConfig.position = value;
+                      saveNotificationSettings();
+                    }}
+                  />
+                </div>
+                <div class="settings-accordion-field-row">
+                  <div class="settings-field-copy">
+                    <div class="settings-accordion-label">通知类型</div>
+                    <p class="settings-field-desc">勾选后将在对应事件发生时弹出通知</p>
+                  </div>
+                  <div class="notification-type-toggles">
+                    <button
+                      class="notif-type-chip"
+                      class:active={notificationTypes.includes("component_start")}
+                      onclick={() => toggleNotificationType("component_start")}
+                      type="button"
+                    >
+                      组件启动完成
+                    </button>
+                    <button
+                      class="notif-type-chip"
+                      class:active={notificationTypes.includes("component_stop")}
+                      onclick={() => toggleNotificationType("component_stop")}
+                      type="button"
+                    >
+                      组件停止完成
+                    </button>
+                  </div>
                 </div>
               </div>
             {/if}

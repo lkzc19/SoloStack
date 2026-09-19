@@ -8,6 +8,7 @@ pub mod environment;
 pub mod install;
 pub mod log_stream;
 pub mod logs;
+pub mod notification;
 
 use solostack_core::component::instances;
 

@@ -92,9 +92,13 @@ export interface SettingsInfo {
   log_viewer: string;
   close_to_tray: boolean;
   show_logs_button: boolean;
+  show_notifications_button: boolean;
   log_level: string;
   log_retention_days: number;
   log_max_total_mb: number;
+  notification_types: string[];
+  toast_dismiss_ms: number;
+  toast_position: string;
 }
 
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
@@ -225,4 +229,16 @@ export interface ComponentAdapter {
   configFields: Component<ConfigFieldsProps>;
   expectedInstallParamIds: (version: string) => readonly string[];
   expectedConfigFieldIds: (version: string) => readonly string[];
+}
+
+/** 通知级别 */
+export type NotificationLevel = "info" | "warn" | "error";
+
+/** 应用内通知 */
+export interface AppNotification {
+  id: string;
+  level: NotificationLevel;
+  title: string;
+  message: string;
+  created_at: string;
 }

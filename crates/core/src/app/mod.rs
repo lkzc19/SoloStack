@@ -8,4 +8,5 @@ pub mod environment_usage;
 pub mod id;
 pub mod migration;
 pub mod paths;
+pub mod notification;
 pub mod settings;

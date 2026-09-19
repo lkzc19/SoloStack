@@ -1027,10 +1027,14 @@ input[type="number"] {
   gap: 16px;
   min-height: 68px;
   padding: 15px 14px;
+  margin-top: 8px;
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
+}
+.settings-toggle-row:first-child {
+  margin-top: 0;
 }
 .settings-toggle-content {
   display: flex;
@@ -1927,4 +1931,37 @@ input[type="number"] {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* 通知类型多选 pill */
+.notification-type-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.notif-type-chip {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.notif-type-chip:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
+.notif-type-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.notif-select {
+  width: 120px;
+  flex-shrink: 0;
+}
+.notification-dismiss-select {
+  min-width: 100px;
 }

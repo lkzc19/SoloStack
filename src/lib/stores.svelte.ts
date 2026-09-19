@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { validateInstalledAdapters } from "./component-adapters/registry";
+import { pushNotification } from "./notifications.svelte.ts";
 import type {
   ComponentInfo,
   ComponentStatusInfo,
@@ -27,6 +28,7 @@ export const store = $state({
   rootDir: "",
   appVersion: "",
   showLogsButton: true,
+  showNotificationsButton: true,
   busy: false,
   busyAction: "", // 当前操作："start" / "stop" / "uninstall" / ""
   busyComponent: "", // 当前操作的组件名
@@ -140,6 +142,7 @@ export async function boot() {
     ]);
     store.appVersion = version;
     store.showLogsButton = settings.show_logs_button;
+    store.showNotificationsButton = settings.show_notifications_button;
   } catch (e) {
     store.errorMsg = `读取应用信息失败: ${e}`;
   }
@@ -197,7 +200,8 @@ export async function switchEnvironment(id: string) {
     await loadMain();
     flashSuccess(`已切换到 ${environment.name}`);
   } catch (error) {
-    store.errorMsg = String(error);
+    const msg = String(error);
+    store.errorMsg = msg;
   } finally {
     store.switchingEnvironmentId = "";
   }
@@ -379,11 +383,13 @@ export async function startComponent(name: string) {
     const ok = await waitForStatus(name, "running", 60000);
     if (ok) {
       flashSuccess("启动命令已执行");
+      pushNotification("info", "组件启动完成", `[${store.activeEnvironmentName}] ${name} 已成功启动`, "component_start");
     } else {
       flashSuccess("启动命令已执行，进程仍在拉起中，稍后自动刷新");
     }
   } catch (e) {
-    store.errorMsg = String(e);
+    const msg = String(e);
+    store.errorMsg = msg;
   } finally {
     store.busy = false;
     store.busyAction = "";
@@ -408,11 +414,13 @@ export async function stopComponent(name: string) {
     const ok = await waitForStatus(name, "stopped", 60000);
     if (ok) {
       flashSuccess("停止命令已执行");
+      pushNotification("info", "组件停止完成", `[${store.activeEnvironmentName}] ${name} 已成功停止`, "component_stop");
     } else {
       flashSuccess("停止命令已执行，进程仍在退出中，稍后自动刷新");
     }
   } catch (e) {
-    store.errorMsg = String(e);
+    const msg = String(e);
+    store.errorMsg = msg;
   } finally {
     store.busy = false;
     store.busyAction = "";

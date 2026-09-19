@@ -3,6 +3,8 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { boot, refreshComponents, handleInstallProgress } from "$lib/stores.svelte.ts";
+  import { initNotifications, cleanupNotifications } from "$lib/notifications.svelte.ts";
+  import ToastContainer from "$lib/ToastContainer.svelte";
   import {
     handleLogStreamBatch,
     handleLogStreamStatus,
@@ -18,6 +20,7 @@
 
   onMount(() => {
     boot();
+    initNotifications();
     const pollTimer = setInterval(refreshComponents, 10000);
     let unlistenInstall: (() => void) | undefined;
     let unlistenBatch: (() => void) | undefined;
@@ -33,6 +36,7 @@
     ).then((u) => (unlistenStatus = u));
     return () => {
       clearInterval(pollTimer);
+      cleanupNotifications();
       void stopLogStream();
       unlistenInstall?.();
       unlistenBatch?.();
@@ -43,4 +47,5 @@
 
 <div class="app">
   {@render children()}
+  <ToastContainer />
 </div>

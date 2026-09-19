@@ -12,10 +12,14 @@ pub struct Settings {
     pub close_to_tray: bool,
     /// 是否在主页顶部显示实时日志入口。
     pub show_logs_button: bool,
+    /// 是否在主页顶部显示通知入口。
+    pub show_notifications_button: bool,
     /// 环境相关设置。
     pub environment: EnvironmentSettings,
     /// 应用诊断日志配置。
     pub log: LogSettings,
+    /// 通知配置。
+    pub notification: NotificationSettings,
 }
 
 /// 环境设置。
@@ -43,6 +47,43 @@ pub struct LogSettings {
     pub max_total_mb: u64,
 }
 
+
+/// 通知配置。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NotificationSettings {
+    /// 启用的通知类型：component_start, component_stop 等。
+    #[serde(default = "default_notification_types")]
+    pub types: Vec<String>,
+    /// toast 自动关闭时间（毫秒）。
+    #[serde(default = "default_toast_dismiss_ms")]
+    pub toast_dismiss_ms: u64,
+    /// toast 弹出位置：top-right, bottom-left, bottom-right。
+    #[serde(default = "default_toast_position")]
+    pub toast_position: String,
+}
+
+impl Default for NotificationSettings {
+    fn default() -> Self {
+        Self {
+            types: default_notification_types(),
+            toast_dismiss_ms: default_toast_dismiss_ms(),
+            toast_position: default_toast_position(),
+        }
+    }
+}
+
+fn default_notification_types() -> Vec<String> {
+    vec![]
+}
+
+fn default_toast_dismiss_ms() -> u64 {
+    5000
+}
+
+fn default_toast_position() -> String {
+    "top-right".to_string()
+}
+
 impl Default for LogSettings {
     fn default() -> Self {
         Self {
@@ -59,8 +100,10 @@ impl Default for Settings {
         Self {
             close_to_tray: default_close_to_tray(),
             show_logs_button: default_show_logs_button(),
+            show_notifications_button: default_show_notifications_button(),
             environment: EnvironmentSettings::default(),
             log: LogSettings::default(),
+            notification: NotificationSettings::default(),
         }
     }
 }
@@ -72,10 +115,14 @@ struct SettingsWire {
     close_to_tray: bool,
     #[serde(default = "default_show_logs_button")]
     show_logs_button: bool,
+    #[serde(default = "default_show_notifications_button")]
+    show_notifications_button: bool,
     #[serde(default)]
     environment: Option<EnvironmentSettings>,
     #[serde(default)]
     log: Option<LogSettings>,
+    #[serde(default)]
+    notification: Option<NotificationSettings>,
     #[serde(default)]
     log_viewer: Option<String>,
     #[serde(default)]
@@ -114,8 +161,10 @@ impl<'de> Deserialize<'de> for Settings {
         Ok(Self {
             close_to_tray: wire.close_to_tray,
             show_logs_button: wire.show_logs_button,
+            show_notifications_button: wire.show_notifications_button,
             environment: wire.environment.unwrap_or_default(),
             log,
+            notification: wire.notification.unwrap_or_default(),
         })
     }
 }
@@ -130,6 +179,10 @@ fn default_close_to_tray() -> bool {
 
 fn default_show_logs_button() -> bool {
     true
+}
+
+fn default_show_notifications_button() -> bool {
+    false
 }
 
 fn default_log_level() -> String {
@@ -183,6 +236,7 @@ mod tests {
         assert_eq!(s.log.viewer, "com.apple.TextEdit");
         assert!(s.close_to_tray, "默认关闭窗口时最小化到托盘");
         assert!(s.show_logs_button, "默认显示实时日志入口");
+        assert!(!s.show_notifications_button, "默认隐藏通知入口");
         assert_eq!(s.log.level, default_log_level());
         assert_eq!(s.log.retention_days, 7);
         assert_eq!(s.log.max_total_mb, 1024);

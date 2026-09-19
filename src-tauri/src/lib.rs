@@ -13,7 +13,7 @@
 mod commands;
 mod tray;
 
-use commands::{app, component, environment, install, log_stream, logs};
+use commands::{app, component, environment, install, log_stream, logs, notification};
 use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,6 +78,8 @@ pub fn run() {
             app::set_logging_settings,
             app::set_close_to_tray,
             app::set_show_logs_button,
+            app::set_show_notifications_button,
+            app::set_notification_settings,
             app::list_apps,
             app::set_log_viewer,
             app::open_log_file,
@@ -110,7 +112,12 @@ pub fn run() {
             log_stream::resume_log_stream,
             logs::list_component_logs,
             logs::read_component_log_tail,
-            logs::query_app_logs
+            logs::query_app_logs,
+            notification::list_notifications,
+            notification::notification_count,
+            notification::clear_notifications,
+            notification::delete_notification,
+            notification::push_notification
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

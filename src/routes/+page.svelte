@@ -16,6 +16,7 @@
   import Button from "$lib/components/ui/button/button.svelte";
   import EnvironmentSwitcher from "$lib/EnvironmentSwitcher.svelte";
   import { store, startComponent, stopComponent } from "$lib/stores.svelte.ts";
+  import NotificationBell from "$lib/NotificationBell.svelte";
 
   interface WebUiUrl {
     name: string;
@@ -92,6 +93,9 @@
       <button class="gear-btn ghost" onclick={openLogs} aria-label="日志">
         <FileText size={16} />
       </button>
+    {/if}
+    {#if store.showNotificationsButton}
+      <NotificationBell />
     {/if}
   </div>
   <div class="topbar-spacer"></div>

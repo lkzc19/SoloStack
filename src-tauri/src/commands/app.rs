@@ -28,9 +28,13 @@ pub fn get_settings() -> Result<SettingsInfo, String> {
         log_viewer: settings.log.viewer,
         close_to_tray: settings.close_to_tray,
         show_logs_button: settings.show_logs_button,
+        show_notifications_button: settings.show_notifications_button,
         log_level: settings.log.level,
         log_retention_days: settings.log.retention_days,
         log_max_total_mb: settings.log.max_total_mb,
+        notification_types: settings.notification.types,
+        toast_dismiss_ms: settings.notification.toast_dismiss_ms,
+        toast_position: settings.notification.toast_position,
     })
 }
 
@@ -88,6 +92,15 @@ pub fn set_show_logs_button(show_logs_button: bool) -> Result<(), String> {
     let mut settings =
         solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
     settings.show_logs_button = show_logs_button;
+    settings.save().map_err(|e| e.to_string())
+}
+
+/// 设置主页是否显示通知入口。
+#[tauri::command]
+pub fn set_show_notifications_button(show_notifications_button: bool) -> Result<(), String> {
+    let mut settings =
+        solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
+    settings.show_notifications_button = show_notifications_button;
     settings.save().map_err(|e| e.to_string())
 }
 
@@ -163,9 +176,35 @@ pub struct SettingsInfo {
     log_viewer: String,
     close_to_tray: bool,
     show_logs_button: bool,
+    show_notifications_button: bool,
     log_level: String,
     log_retention_days: u32,
     log_max_total_mb: u64,
+    notification_types: Vec<String>,
+    toast_dismiss_ms: u64,
+    toast_position: String,
+}
+
+
+/// 保存通知配置。
+#[tauri::command]
+pub fn set_notification_settings(
+    notification_types: Vec<String>,
+    toast_dismiss_ms: u64,
+    toast_position: String,
+) -> Result<(), String> {
+    let valid_positions = ["top-right", "bottom-left", "bottom-right"];
+    if !valid_positions.contains(&toast_position.as_str()) {
+        return Err(format!("不支持的弹出位置: {toast_position}"));
+    }
+    if toast_dismiss_ms != 0 && (toast_dismiss_ms < 1000 || toast_dismiss_ms > 30000) {
+        return Err("自动关闭时间必须在 1000 到 30000 毫秒之间".to_string());
+    }
+    let mut settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;
+    settings.notification.types = notification_types;
+    settings.notification.toast_dismiss_ms = toast_dismiss_ms;
+    settings.notification.toast_position = toast_position;
+    settings.save().map_err(|e| e.to_string())
 }
 
 /// 本机 JDK（GUI 展示）。
