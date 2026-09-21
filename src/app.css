@@ -2,6 +2,14 @@
 @plugin "tailwindcss-animate";
 @custom-variant dark (&:is(.dark *));
 
+/* 样式约定（两套体系，各有分工）：
+   - UI 原语（`src/lib/components/ui/*`，shadcn 风格）用 Tailwind 工具类 +
+     `cn()`/tailwind-merge，跟 shadcn 生态保持一致，便于后续换组件。
+   - 业务界面（路由页与 `src/lib/*.svelte`）用本文件的语义类 + CSS 变量
+     （`--panel` / `--line` / `--text` / `--muted` / `--primary` …），
+     因为这里的布局大量依赖固定尺寸、密度与深色模式变量，写工具类反而更碎。
+   新增样式前先判断属于哪一侧，不要混用。 */
+
 /* shadcn-svelte 主题令牌（浅色 slate + Vue 绿主色）。挂 :root，
    让 bits-ui 弹层（teleport 到 body）等脱离 .app 的元素也能继承 */
 :root {
@@ -104,6 +112,10 @@
 .content {
   position: relative;
   z-index: 1;
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 2rem 1.5rem;
+  min-width: 0;
 }
 
 .topbar,
@@ -117,8 +129,9 @@
   display: flex;
   align-items: center;
   gap: 0.9rem;
-  padding: 28px 2rem 12px;
-  height: 96px;
+  /* 顶部 28px 给 macOS 交通灯让位；整体高度收窄让内容上提 */
+  padding: 28px 2rem 8px;
+  height: 82px;
   box-sizing: border-box;
   background: var(--bg);
 }
@@ -136,7 +149,7 @@
 .brand-name {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: 20px;
+  font-size: 24px;
   letter-spacing: 0.04em;
   color: var(--text-hi);
   user-select: none;
@@ -151,8 +164,9 @@
   display: flex;
   align-items: center;
   gap: 0.8rem;
-  padding: 28px 2rem 12px;
-  height: 96px;
+  /* 与 .topbar 一致：顶部给交通灯让位，底部收紧 */
+  padding: 28px 2rem 8px;
+  height: 82px;
   box-sizing: border-box;
   background: var(--bg);
 }
@@ -163,6 +177,12 @@
   font-size: 15px;
   letter-spacing: 0.02em;
   color: var(--text-hi);
+  /* 页头控件变宽（如展开搜索框）时，标题单行省略，
+     不换行——否则日志文件名会被挤到第二行而看不见 */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .page-header-spacer {
   flex: 1;
@@ -171,7 +191,8 @@
 .environment-readonly {
   display: inline-flex;
   align-items: center;
-  height: 38px;
+  flex-shrink: 0;
+  height: 34px;
   min-width: min(150px, 32vw);
   max-width: min(220px, 38vw);
   padding: 0 10px 0 16px;
@@ -201,8 +222,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
+  /* 普通 button（非 Button 组件，没有 shrink-0）：空间紧张时不能被 flex
+     压扁，否则展开搜索时返回按钮会被挤压抖动 */
+  flex-shrink: 0;
   border: none;
   border-radius: var(--radius);
   background: rgba(66, 184, 131, 0.1);
@@ -271,13 +295,6 @@
 }
 
 /* ── 主体（main 组件列表） ── */
-.content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 2rem 1.5rem;
-  min-width: 0;
-}
-
 /* 组件列表（满宽，左右边距由 .content 的 1.2rem 统一） */
 .component-list {
   display: flex;
@@ -353,6 +370,14 @@
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+}
+/* 图标按钮是 32px 透明方块、图标只有 15px，左右各 8.5px 不可见留白：
+   两个图标相邻时会多出一倍留白，看着比「文字按钮 → 图标」的间距大。
+   故把图标按钮单独成组、组内紧贴，让两处视觉间距一致（≈17px）。 */
+.row-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
 }
 /* 行内图标按钮（配置 / 日志），hover 浅色底 + title 提示 */
 .icon-btn {
@@ -477,14 +502,6 @@ input[type="number"] {
   position: relative;
   z-index: 1;
 }
-.logs-toolbar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 2rem;
-  background: var(--bg);
-}
 /* 输入框（统一） */
 .input {
   box-sizing: border-box;
@@ -508,17 +525,69 @@ input[type="number"] {
 .input::placeholder {
   color: var(--muted);
 }
-.search-input {
-  flex: 1;
-  max-width: 320px;
+/* 页头里的操作按钮：与页头既有按钮（.gear-btn / .environment-switcher）同高 */
+.header-btn {
+  height: 34px;
 }
-.logs-toolbar-spacer {
-  flex: 1;
+/* 页头可折叠搜索：收起是 34×34 的放大镜按钮，展开是输入框。
+   收起/展开是同一个容器改宽度，这样才有过渡动画。 */
+.search-toggle {
+  display: flex;
+  align-items: center;
+  /* 宽度完全由 .open 决定：不被 flex 压缩，否则会和宽度过渡打架 */
+  flex: none;
+  width: 34px;
+  height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+  transition:
+    width 0.18s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
-.logs-count {
-  font-size: 11px;
+.search-toggle.open {
+  width: 200px;
+}
+.search-toggle:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(66, 184, 131, 0.15);
+}
+.search-toggle-trigger {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--muted);
-  flex-shrink: 0;
+  cursor: pointer;
+}
+.search-toggle-trigger:hover {
+  color: var(--primary-deep);
+}
+.search-toggle input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px 0 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.search-toggle.open input {
+  opacity: 1;
+}
+.search-toggle input::placeholder {
+  color: var(--muted);
 }
 .logs-scroll {
   flex: 1;
@@ -795,7 +864,7 @@ input[type="number"] {
 }
 .page-body {
   /* 满宽，左右边距 2rem 与 header/footer 对齐 */
-  padding: 12px 2rem 3rem;
+  padding: 8px 2rem 3rem;
   box-sizing: border-box;
 }
 /* 设置页吸顶条：通栏不透明背景，让滚动内容干净地从条带下方穿过，
@@ -805,7 +874,7 @@ input[type="number"] {
   top: 0;
   z-index: 10;
   background: var(--bg);
-  padding: 10px 2rem;
+  padding: 8px 2rem;
 }
 .settings-tabs {
   display: flex;

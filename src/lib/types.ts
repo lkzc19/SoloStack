@@ -53,7 +53,8 @@ export interface EnvironmentComponentOverview {
   version: string;
   display_name: string;
   installed_at: string;
-  status: string;
+  /** 组件状态；非活跃环境为 null（不展示，避免误导）。 */
+  status: string | null;
 }
 
 export interface EnvironmentOverview {
@@ -103,34 +104,25 @@ export interface SettingsInfo {
 
 export type LogLevel = "error" | "warn" | "info" | "debug" | "trace";
 
-export interface LogRecord {
-  timestamp: string;
+/** 统一日志行：app 为结构化字段，组件为 raw 文本（level 为 null）。 */
+export interface LogLine {
+  timestamp?: string;
   trace_id?: string;
-  level: LogLevel;
+  level?: LogLevel;
   environment_id?: string;
   message: string;
+  raw: boolean;
 }
 
-export interface LogPage {
-  date: string;
-  records: LogRecord[];
-  total: number;
-  truncated: boolean;
-  environments: string[];
-}
-
-export interface StreamLogLine {
-  timestamp: string | null;
-  trace_id?: string;
-  level: LogLevel;
-  environment_id?: string;
-  message: string;
-}
+/** 日志来源：app（实时或指定日期）或组件单文件。 */
+export type LogSourceRequest =
+  | { kind: "app_log"; date?: string }
+  | { kind: "component"; environment_id: string; component: string; path: string };
 
 export interface LogStreamBatch {
   stream_id: string;
   sequence: number;
-  records: StreamLogLine[];
+  records: LogLine[];
   dropped: number;
 }
 
@@ -147,7 +139,7 @@ export interface LogStreamStatus {
 
 export interface StartLogStreamResponse {
   stream_id: string;
-  records: StreamLogLine[];
+  records: LogLine[];
   offset: number;
 }
 

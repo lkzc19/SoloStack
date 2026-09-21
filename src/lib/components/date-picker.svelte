@@ -6,8 +6,20 @@
 
   let {
     value = "",
+    min = "",
+    max = "",
+    class: cls = "",
     onPick,
-  }: { value?: string; onPick?: (v: string) => void } = $props();
+  }: {
+    value?: string;
+    /** 可选下界（YYYY-MM-DD），早于它的日期不可选。 */
+    min?: string;
+    /** 可选上界（YYYY-MM-DD），晚于它的日期不可选。 */
+    max?: string;
+    /** 透传给触发按钮，用于按所在位置调整尺寸。 */
+    class?: string;
+    onPick?: (v: string) => void;
+  } = $props();
 
   let open = $state(false);
   let viewYear = $state(0);
@@ -30,8 +42,9 @@
     }
   }
 
-  // 触发按钮文案：今天 →「今天」，否则 YYYY-MM-DD
-  const label = $derived(value ? (value === today ? "今天" : value) : "今天");
+  // 触发按钮文案：今天 →「今天」，其余显示 MM-DD。
+  // 「今天」(2 字) 与 MM-DD(5 字符位) 宽度接近，按钮长度基本恒定、也不会有大片留白。
+  const label = $derived(!value || value === today ? "今天" : value.slice(5));
 
   // 当月格子：前置空位（周一起始）+ 每日
   const days = $derived.by(() => {
@@ -49,6 +62,11 @@
   });
 
   const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+
+  /** YYYY-MM-DD 字典序即时间序，直接比较即可。 */
+  function outOfRange(d: string) {
+    return (min !== "" && d < min) || (max !== "" && d > max);
+  }
 
   function prevMonth() {
     viewMonth--;
@@ -73,9 +91,9 @@
 
 <Popover.Root bind:open onOpenChange={(o) => { open = o; if (o) initView(); }}>
   <Popover.Trigger>
-    <Button variant="outline" size="sm" type="button" onclick={(e) => { e.preventDefault(); }}>
-      <CalendarDays size={15} />
-      <span>{label}</span>
+    <Button variant="outline" size="sm" type="button" class={cls} onclick={(e) => { e.preventDefault(); }}>
+      <CalendarDays size={14} class="date-trigger-icon" />
+      <span class="date-label">{label}</span>
     </Button>
   </Popover.Trigger>
   <Popover.Content side="bottom" align="start" sideOffset={6} class="date-content">
@@ -101,6 +119,7 @@
             class="date-day"
             class:selected={d === value}
             class:today={d === today}
+            disabled={outOfRange(d)}
             onclick={() => pick(d)}
           >
             {Number(d.slice(8))}
@@ -112,6 +131,21 @@
 </Popover.Root>
 
 <style>
+  /* 中文在行盒里视觉重心偏上，居中后的图标看起来略低：
+     transform 做纯视觉上移，不参与布局、不影响按钮尺寸。 */
+  :global(.date-trigger-icon) {
+    transform: translateY(-0.5px);
+  }
+  /* 文案是「今天」或 MM-DD（5 个字符位）：5ch 兜底，
+     tabular-nums 让不同日期的数字等宽，按钮尺寸全程稳定。 */
+  .date-label {
+    display: inline-block;
+    min-width: 5ch;
+    /* 左对齐：图标到文字的间距保持 Button 自带的 gap(6px)，
+       与其它「图标 + 文字」按钮一致；多出的宽度落在文字右侧（≈6px，几乎看不出）。 */
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
   :global(.date-content) {
     width: 264px;
     padding: 12px;
@@ -185,5 +219,13 @@
     background: var(--primary);
     color: #fff;
     font-weight: 600;
+  }
+  .date-day:disabled {
+    color: var(--muted);
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .date-day:disabled:hover {
+    background: transparent;
   }
 </style>

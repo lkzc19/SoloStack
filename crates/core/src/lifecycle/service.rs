@@ -10,6 +10,20 @@ pub enum Status {
     Error(String),
 }
 
+impl Status {
+    /// 前端契约字符串：`running` / `stopped` / `partial` / `error:<message>`。
+    ///
+    /// 展示层（Tauri 命令）统一走这里，避免同一枚举在多处各写一份映射而漂移。
+    pub fn to_wire(&self) -> String {
+        match self {
+            Status::Running => "running".to_string(),
+            Status::Stopped => "stopped".to_string(),
+            Status::Partial => "partial".to_string(),
+            Status::Error(error) => format!("error:{error}"),
+        }
+    }
+}
+
 /// 启动组件：配置就绪后由组件自己的启停序列执行。
 pub fn start(environment_id: &str, name: &str, version: &str) -> Result<(), String> {
     if crate::app::environment::active_id()?.as_deref() != Some(environment_id) {
@@ -20,7 +34,7 @@ pub fn start(environment_id: &str, name: &str, version: &str) -> Result<(), Stri
         &format!("启动组件 {name} v{version}"),
     );
     let result = (|| {
-        component::prepare_config(environment_id, name, version)?;
+        component::config_io::prepare_config(environment_id, name, version)?;
         let c = registry::by_component(name).ok_or_else(|| format!("不支持的组件: {name}"))?;
         c.init(environment_id, version)?;
         c.start(environment_id, version)
@@ -45,18 +59,51 @@ pub fn stop(environment_id: &str, name: &str, version: &str) -> Result<(), Strin
 
 /// 组件整体运行状态：端口由组件从自己的配置文件**精确读**出，
 /// 全部开放 Running / 部分 Partial / 全关 Stopped。
+///
+/// 只反映真实运行状态，**不感知活跃环境**：停止路径必须拿到真实状态才能
+/// 停掉遗留进程。面向展示的「非活跃环境不展示状态」规则见
+/// `lifecycle::environment::displayed_component_statuses`。
 pub fn component_status(environment_id: &str, name: &str, version: &str) -> Status {
     let Some(component) = registry::by_component(name) else {
         return Status::Stopped;
     };
     let specs = component.service_specs(environment_id, version);
-    if !specs.is_empty() {
-        return match process::inspect_services(&specs) {
-            Ok(observations) => services_status(&observations),
-            Err(error) => Status::Error(error),
-        };
+    if specs.is_empty() {
+        // 无进程服务：只看端口，无需扫描进程表
+        return ports_status(&component.detect_ports(environment_id, version));
     }
-    ports_status(&component.detect_ports(environment_id, version))
+    match process::ProcessSnapshot::scan() {
+        Ok(snapshot) => status_from_services(&snapshot, &specs),
+        Err(error) => Status::Error(error),
+    }
+}
+
+/// 组件状态，复用调用方给的进程表快照（批量查询时只扫一次 `ps`）。
+pub fn component_status_in(
+    environment_id: &str,
+    name: &str,
+    version: &str,
+    snapshot: &process::ProcessSnapshot,
+) -> Status {
+    let Some(component) = registry::by_component(name) else {
+        return Status::Stopped;
+    };
+    let specs = component.service_specs(environment_id, version);
+    if specs.is_empty() {
+        return ports_status(&component.detect_ports(environment_id, version));
+    }
+    status_from_services(snapshot, &specs)
+}
+
+/// 一组服务观测 → 组件状态；无法扫描进程表时归为 Error。
+fn status_from_services(
+    snapshot: &process::ProcessSnapshot,
+    specs: &[process::ServiceSpec],
+) -> Status {
+    match snapshot.inspect(specs) {
+        Ok(observations) => services_status(&observations),
+        Err(error) => Status::Error(error),
+    }
 }
 
 /// 端口集合 → 状态。
@@ -124,7 +171,7 @@ mod tests {
     fn setup_fake_hadoop(tmp: &std::path::Path, environment_id: &str) {
         std::env::set_var("HOME", tmp);
         let instance = paths::instance_dir(environment_id, "hadoop", "3.5.0").unwrap();
-        let config = component::config_dir(environment_id, "hadoop", "3.5.0").unwrap();
+        let config = component::config_io::config_dir(environment_id, "hadoop", "3.5.0").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
         let name_dir = paths::var_data_instance_dir(environment_id, "hadoop", "3.5.0")
@@ -205,9 +252,21 @@ mod tests {
         start(&environment_id, "hadoop", "3.5.0").unwrap();
         stop(&environment_id, "hadoop", "3.5.0").unwrap();
 
-        let logs = app_log::read_logs_for(&app_log::today()).unwrap();
-        assert_eq!(logs.matches("启动组件 hadoop v3.5.0").count(), 1);
-        assert_eq!(logs.matches("停止组件 hadoop v3.5.0").count(), 1);
+        let lines = crate::logs::tail(
+            &crate::logs::LogSource::App {
+                date: Some(app_log::today()),
+            },
+            100,
+        )
+        .unwrap();
+        let count = |needle: &str| {
+            lines
+                .iter()
+                .filter(|line| line.message.contains(needle))
+                .count()
+        };
+        assert_eq!(count("启动组件 hadoop v3.5.0"), 1);
+        assert_eq!(count("停止组件 hadoop v3.5.0"), 1);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -1,24 +1,18 @@
 <script lang="ts">
-  import { Pause, Play, Trash2 } from "lucide-svelte";
-  import Button from "$lib/components/ui/button/button.svelte";
-  import {
-    logStream,
-    pauseLogStream,
-    resumeLogStream,
-  } from "$lib/log-stream.svelte.ts";
+  // 日志视口：只负责渲染与自动跟随；筛选/暂停等控件在页头（见 routes/logs）。
+  import { logStream } from "$lib/log-stream.svelte.ts";
 
   let viewport = $state<HTMLDivElement | null>(null);
   let autoFollow = $state(true);
-  let traceQuery = $state("");
 
   const filteredRows = $derived(
-    traceQuery.trim()
+    logStream.query.trim()
       ? logStream.rows.filter((row) => {
-          const query = traceQuery.trim().toLowerCase();
+          const query = logStream.query.trim().toLowerCase();
           return [
             row.timestamp ?? "",
             row.trace_id ?? "",
-            row.level,
+            row.level ?? "",
             row.environment_id ?? "",
             row.message,
           ].some((value) => value.toLowerCase().includes(query));
@@ -41,40 +35,6 @@
 </script>
 
 <div class="live-log">
-  <div class="logs-toolbar">
-    <input
-      class="input mono search-input"
-      bind:value={traceQuery}
-      placeholder="搜索关键词"
-      spellcheck="false"
-    />
-    <div class="logs-toolbar-spacer"></div>
-    {#if logStream.state === "paused"}
-      <Button variant="outline" size="sm" onclick={resumeLogStream}>
-        <Play size={14} />
-        恢复
-      </Button>
-    {:else}
-      <Button
-        variant="outline"
-        size="sm"
-        onclick={pauseLogStream}
-        disabled={logStream.state !== "following"}
-      >
-        <Pause size={14} />
-        暂停
-      </Button>
-    {/if}
-    <Button
-      variant="outline"
-      size="sm"
-      onclick={() => (logStream.rows = [])}
-    >
-      <Trash2 size={14} />
-      清空
-    </Button>
-  </div>
-
   {#if logStream.error}
     <p class="msg error live-log-error">{logStream.error}</p>
   {/if}
@@ -83,21 +43,21 @@
     <div class="live-log-viewport mono" bind:this={viewport} onscroll={onScroll}>
       {#if filteredRows.length === 0}
         <div class="live-log-empty">暂无日志</div>
-      {:else if logStream.mode === "component"}
-        {#each filteredRows as row}
-          <div class="live-log-raw-line">{row.message}</div>
-        {/each}
       {:else}
         {#each filteredRows as row}
-          <div class="live-log-row">
-            <span class="live-log-time">{row.timestamp ?? "-"}</span>
-            <span class="live-log-trace">{row.trace_id ?? "-"}</span>
-            <span class="live-log-level {row.level}">
-              {row.level.toUpperCase()}
-            </span>
-            <span class="live-log-env">{row.environment_id ?? "-"}</span>
-            <span class="live-log-message">{row.message}</span>
-          </div>
+          {#if row.raw}
+            <div class="live-log-raw-line">{row.message}</div>
+          {:else}
+            <div class="live-log-row">
+              <span class="live-log-time">{row.timestamp ?? "-"}</span>
+              <span class="live-log-trace">{row.trace_id ?? "-"}</span>
+              <span class="live-log-level {row.level ?? ""}">
+                {(row.level ?? "").toUpperCase()}
+              </span>
+              <span class="live-log-env">{row.environment_id ?? "-"}</span>
+              <span class="live-log-message">{row.message}</span>
+            </div>
+          {/if}
         {/each}
       {/if}
     </div>

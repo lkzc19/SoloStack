@@ -6,6 +6,7 @@
   import { ExternalLink, Folder, Play } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
   import PageHeader from "$lib/PageHeader.svelte";
+  import SearchToggle from "$lib/SearchToggle.svelte";
   import { store, basename, getSelected } from "$lib/stores.svelte.ts";
   import type { ComponentDirs, LogEntry } from "$lib/types";
 
@@ -87,25 +88,23 @@
   }
 </script>
 
-<PageHeader title={`${selected?.display_name || store.selectedName} · 日志`} />
-
-<div class="logs-view">
-  <div class="logs-toolbar">
-    <input
-      class="input mono search-input"
-      type="text"
-      placeholder="搜索日志文件名"
-      bind:value={searchQuery}
-      spellcheck="false"
-    />
-    <div class="logs-toolbar-spacer"></div>
-    <span class="logs-count mono">{filteredLogs.length} 个日志文件</span>
-    <Button variant="outline" size="sm" onclick={openInFinder} disabled={!logDir}>
-      <Folder size={15} />
+<PageHeader title={`${selected?.display_name || store.selectedName} · 日志`}>
+  {#snippet actions()}
+    <SearchToggle bind:value={searchQuery} placeholder="搜索日志文件名" />
+    <Button
+      variant="outline"
+      size="sm"
+      class="header-btn"
+      onclick={openInFinder}
+      disabled={!logDir}
+    >
+      <Folder size={14} />
       在访达中显示
     </Button>
-  </div>
+  {/snippet}
+</PageHeader>
 
+<div class="logs-view">
   <div class="logs-scroll">
     {#if filteredLogs.length === 0}
       <div class="logs-empty">

@@ -23,6 +23,8 @@ pub const VAR_RUN_DIR: &str = "run";
 pub const SETTINGS_FILE: &str = "settings.json";
 /// 环境元数据文件名。
 pub const ENVIRONMENT_FILE: &str = "environment.json";
+/// 已应用的迁移版本标记文件名。
+pub const MIGRATION_VERSION_FILE: &str = ".migration-version";
 
 /// SoloStack 数据根目录：`~/.solostack/`。
 pub fn root_dir() -> Result<PathBuf, std::io::Error> {
@@ -171,6 +173,11 @@ pub fn downloads_dir() -> Result<PathBuf, std::io::Error> {
 /// 设置文件路径：`~/.solostack/app/settings.json`。
 pub fn settings_file() -> Result<PathBuf, std::io::Error> {
     Ok(app_dir()?.join(SETTINGS_FILE))
+}
+
+/// 迁移版本标记：`~/.solostack/.migration-version`。
+pub fn migration_version_file() -> Result<PathBuf, std::io::Error> {
+    Ok(root_dir()?.join(MIGRATION_VERSION_FILE))
 }
 
 /// 创建应用级目录。

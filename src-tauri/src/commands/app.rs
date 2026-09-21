@@ -1,7 +1,7 @@
 //! 应用与设置：架构、数据根目录、用户设置、日志查看器、app 操作日志、本机 JDK。
 
 use solostack_core::app::{app_log, paths};
-use solostack_core::lifecycle::logs;
+use solostack_core::logs;
 use solostack_core::platform::{app_scan, arch, jdk};
 
 use super::resolve;
@@ -114,7 +114,7 @@ pub fn open_log_file(
     path: String,
 ) -> Result<(), String> {
     let i = resolve(&environment_id, &component)?;
-    let path = logs::validated_log_file(
+    let path = logs::validated_component_file(
         &i.environment_id,
         &i.name,
         &i.version,
@@ -141,19 +141,6 @@ pub fn open_log_file(
         .success()
         .then_some(())
         .ok_or_else(|| "无法打开日志：所选编辑器不可用，且系统没有默认处理程序".to_string())
-}
-
-/// 读取 app 操作日志：默认今天的完整日志；`date` 传 `YYYY-MM-DD` 看历史某天。
-#[tauri::command]
-pub fn get_app_logs(date: Option<String>) -> Result<String, String> {
-    let date = date.unwrap_or_else(app_log::today);
-    app_log::read_logs_for(&date)
-}
-
-/// 列出 app 日志可用日期（倒序，新的在前）。
-#[tauri::command]
-pub fn list_log_dates() -> Result<Vec<String>, String> {
-    app_log::list_log_dates()
 }
 
 /// 本机已安装的 JDK 列表（安装页 / 配置页 JDK 下拉，含发行商 + 版本）。
@@ -197,7 +184,7 @@ pub fn set_notification_settings(
     if !valid_positions.contains(&toast_position.as_str()) {
         return Err(format!("不支持的弹出位置: {toast_position}"));
     }
-    if toast_dismiss_ms != 0 && (toast_dismiss_ms < 1000 || toast_dismiss_ms > 30000) {
+    if toast_dismiss_ms != 0 && !(1000..=30000).contains(&toast_dismiss_ms) {
         return Err("自动关闭时间必须在 1000 到 30000 毫秒之间".to_string());
     }
     let mut settings = solostack_core::app::settings::Settings::load().map_err(|e| e.to_string())?;

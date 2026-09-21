@@ -5,7 +5,5 @@
 pub mod environment;
 pub mod install;
 pub mod lock;
-pub mod log_stream;
-pub mod logs;
 pub mod service;
 pub mod uninstall;

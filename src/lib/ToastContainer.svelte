@@ -12,8 +12,9 @@
 
 <div class="toast-container position-{toastConfig.position}">
   {#each toasts as toast (toast.id)}
+    {@const Icon = levelIcon[toast.level]}
     <div class="toast toast-{toast.level}">
-      <span class="toast-icon toast-icon-{toast.level}"><svelte:component this={levelIcon[toast.level]} size={20} /></span>
+      <span class="toast-icon toast-icon-{toast.level}"><Icon size={20} /></span>
       <div class="toast-body">
         <div class="toast-title">{toast.title}</div>
         {#if toast.message}

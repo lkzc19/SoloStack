@@ -16,11 +16,13 @@
 //! | `package` | 安装包获取：下载源清单、下载、解压 | 组件概念 |
 //! | `component` | 组件抽象与实现、实例发现、配置字段调度、脚本执行 | 生命周期编排 |
 //! | `lifecycle` | 安装 / 卸载 / 启停 / 日志等生命周期编排 | 组件内部实现细节 |
+//! | `logs` | 日志读取：app 与组件共用的来源、读取与实时跟随 | 写入（在 `app_log`） |
 
 pub mod app;
 pub mod component;
 pub mod config;
 pub mod lifecycle;
+pub mod logs;
 pub mod package;
 pub mod platform;
 

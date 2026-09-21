@@ -2,18 +2,19 @@
   import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { page } from "$app/state";
+  import { Save, Trash2 } from "lucide-svelte";
   import PageHeader from "$lib/PageHeader.svelte";
   import Button from "$lib/components/ui/button/button.svelte";
   import Select from "$lib/components/ui/select/select.svelte";
   import { componentAdapter, validateConfigFieldIds } from "$lib/component-adapters/registry";
   import {
     store,
-    flashSuccess,
     getSelected,
     doUninstall,
     startComponent,
     stopComponent,
   } from "$lib/stores.svelte.ts";
+  import { toastSuccess } from "$lib/notifications.svelte.ts";
   import type { ConfigFieldUpdate, JdkInfo } from "$lib/types";
 
   interface FieldValue {
@@ -98,7 +99,7 @@
         .filter((field) => field.value !== initialFields[field.id])
         .map((field) => ({ id: field.id, value: field.value }));
       if (updates.length === 0) {
-        flashSuccess("配置无变化");
+        toastSuccess("配置无变化");
         return;
       }
       await invoke("save_config_fields", {
@@ -109,9 +110,9 @@
       if (wasRunning) {
         await stopComponent(name);
         await startComponent(name);
-        flashSuccess("配置已保存，组件已重启");
+        toastSuccess("配置已保存，组件已重启");
       } else {
-        flashSuccess("配置已保存");
+        toastSuccess("配置已保存");
       }
       if (selected) await loadFields(name, selected.version);
     } catch (e) {
@@ -127,16 +128,20 @@
     <Button
       variant="destructive"
       size="sm"
+      class="header-btn"
       onclick={() => (showUninstall = true)}
       disabled={Boolean(store.switchingEnvironmentId)}
     >
+      <Trash2 size={14} />
       卸载组件
     </Button>
     <Button
       size="sm"
+      class="header-btn"
       onclick={() => (showSaveConfirm = true)}
       disabled={fields.length === 0 || Boolean(store.switchingEnvironmentId)}
     >
+      <Save size={14} />
       保存配置
     </Button>
   {/snippet}

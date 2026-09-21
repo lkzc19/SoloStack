@@ -7,7 +7,7 @@
 //! | 文件 | 职责 |
 //! |---|---|
 //! | `mod.rs` | 组件类型声明 + `Component` 实现 |
-//! | `config.rs` | 配置布局、生效值 `Effective`、生成与字段读写（`ConfigLifecycle` / `FieldSchema`） |
+//! | `config/` | 配置布局、生效值 `Effective`、生成与字段读写（`ConfigLifecycle` / `FieldSchema`） |
 //! | `runtime.rs` | 启停序列、WebUI 入口、NameNode 格式化（`Runtime`） |
 
 mod config;

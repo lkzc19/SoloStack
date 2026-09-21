@@ -203,7 +203,7 @@ fn run_command(
     args: &[&str],
     timeout: Duration,
 ) -> Result<(), String> {
-    let conf = component::config_dir(environment_id, NAME, version)?
+    let conf = component::config_io::config_dir(environment_id, NAME, version)?
         .display()
         .to_string();
     exec::run_checked(
@@ -241,7 +241,7 @@ mod tests {
     /// 调用方需持有 HOME_LOCK。
     fn setup(tmp: &std::path::Path, name_dir: Option<&std::path::Path>) {
         std::env::set_var("HOME", tmp);
-        let dir = component::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
+        let dir = component::config_io::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         let mut hdfs = String::from("<?xml version=\"1.0\"?>\n<configuration>\n");
         if let Some(p) = name_dir {
@@ -307,7 +307,7 @@ mod tests {
         setup(&tmp, None);
 
         let instance = paths::instance_dir(ENV_ID, NAME, "3.5.0").unwrap();
-        let config = component::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
+        let config = component::config_io::config_dir(ENV_ID, NAME, "3.5.0").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
         std::fs::create_dir_all(&bin).unwrap();

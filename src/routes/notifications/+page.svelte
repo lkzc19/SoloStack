@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Trash2, X, Info, TriangleAlert, CircleX } from "lucide-svelte";
-  import PageHeader from "$lib/PageHeader.svelte";
   import Button from "$lib/components/ui/button/button.svelte";
+  import PageHeader from "$lib/PageHeader.svelte";
   import {
     notifications,
     markSeen,
@@ -29,7 +29,13 @@
 
 <PageHeader title="通知">
   {#snippet actions()}
-    <Button variant="outline" size="sm" onclick={clearAll} disabled={notifications.items.length === 0}>
+    <Button
+      variant="outline"
+      size="sm"
+      class="header-btn"
+      onclick={clearAll}
+      disabled={notifications.items.length === 0}
+    >
       <Trash2 size={14} />
       清空
     </Button>
@@ -44,9 +50,10 @@
   {:else}
     <div class="notif-list">
       {#each notifications.items as n (n.id)}
+        {@const Icon = levelIcon[n.level]}
         <div class="notif-item">
           <span class="notif-icon level-{n.level}">
-            <svelte:component this={levelIcon[n.level]} size={16} />
+            <Icon size={16} />
           </span>
           <div class="notif-body">
             <div class="notif-title-row">

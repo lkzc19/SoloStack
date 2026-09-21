@@ -176,12 +176,14 @@
               启动
             </Button>
           {/if}
-          <button class="icon-btn" onclick={() => openComponentConfig(component.name)} title="配置">
-            <SlidersHorizontal size={15} />
-          </button>
-          <button class="icon-btn" onclick={() => openComponentLogs(component.name)} title="日志">
-            <FileText size={15} />
-          </button>
+          <div class="row-icon-group">
+            <button class="icon-btn" onclick={() => openComponentConfig(component.name)} title="配置">
+              <SlidersHorizontal size={15} />
+            </button>
+            <button class="icon-btn" onclick={() => openComponentLogs(component.name)} title="日志">
+              <FileText size={15} />
+            </button>
+          </div>
         </div>
       </div>
     {/each}

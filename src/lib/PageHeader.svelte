@@ -11,7 +11,7 @@
 </script>
 
 <header class="page-header" data-tauri-drag-region>
-  <button class="gear-btn" onclick={onBack} aria-label="返回">
+  <button class="gear-btn" onclick={onBack} aria-label="返回" title="返回">
     <ArrowLeft size={16} />
   </button>
   <h2 class="page-title">{title}</h2>

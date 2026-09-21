@@ -92,10 +92,26 @@ pub fn ports_open(ports: &[u16]) -> bool {
     !ports.is_empty() && ports.iter().all(|p| port_open(*p))
 }
 
-/// 检查逻辑服务的进程身份和监听端口归属。
-pub fn inspect_services(specs: &[ServiceSpec]) -> Result<Vec<ServiceObservation>, String> {
-    let processes = scan_processes()?;
-    classify_services(specs, &processes, listening_pids)
+/// 进程表快照：一次 `ps` 扫描的结果，可在多组 `ServiceSpec` 间复用。
+///
+/// 批量查询（如环境概览一次问多个组件）时先 `scan` 一次再逐个 `inspect`，
+/// 避免每个组件都重新扫一遍进程表。
+pub struct ProcessSnapshot {
+    processes: Vec<ProcessIdentity>,
+}
+
+impl ProcessSnapshot {
+    /// 扫描本机进程表。
+    pub fn scan() -> Result<Self, String> {
+        Ok(Self {
+            processes: scan_processes()?,
+        })
+    }
+
+    /// 用本快照检查一组逻辑服务的进程身份与监听端口归属。
+    pub fn inspect(&self, specs: &[ServiceSpec]) -> Result<Vec<ServiceObservation>, String> {
+        classify_services(specs, &self.processes, listening_pids)
+    }
 }
 
 fn classify_services<F>(

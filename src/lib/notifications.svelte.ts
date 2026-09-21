@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { writable, get } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import type { AppNotification, NotificationLevel, SettingsInfo } from "./types";
 
@@ -10,8 +9,8 @@ export const notifications = $state({
 
 });
 
-/** 是否有未读通知（红点） */
-export const hasUnreadStore = writable(false);
+/** 是否有未读通知（红点）。用 $state 对象：Svelte 5 不允许 reassign 导出的 state。 */
+export const unread = $state({ value: false });
 
 
 /** toast 队列 */
@@ -51,7 +50,7 @@ export async function initNotifications() {
       const n = e.payload;
       notifications.items.unshift(n);
       notifications.count++;
-      hasUnreadStore.set(true);
+      unread.value = true;
       showToast(n);
     }
   );
@@ -64,7 +63,18 @@ export function cleanupNotifications() {
 
 /** 进入通知页时标记已读，红点消失 */
 export function markSeen() {
-  hasUnreadStore.set(false);
+  unread.value = false;
+}
+
+/** 直接弹一条成功 toast：不入通知中心、不受通知类型开关影响（用于页面操作反馈）。 */
+export function toastSuccess(message: string) {
+  showToast({
+    id: crypto.randomUUID().slice(0, 8),
+    level: "info",
+    title: message,
+    message: "",
+    created_at: new Date().toISOString(),
+  });
 }
 /** 推送一条通知（后端 push 后自动通过事件到达前端，此方法供前端直接调用） */
 export async function pushNotification(

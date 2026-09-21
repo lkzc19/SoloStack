@@ -2,12 +2,8 @@
   import { Popover } from "bits-ui";
   import { ChevronDown, Plus } from "lucide-svelte";
   import Button from "$lib/components/ui/button/button.svelte";
-  import {
-    createEnvironment,
-    flashSuccess,
-    store,
-    switchEnvironment,
-  } from "$lib/stores.svelte.ts";
+  import { createEnvironment, store, switchEnvironment } from "$lib/stores.svelte.ts";
+  import { toastSuccess } from "$lib/notifications.svelte.ts";
 
   let open = $state(false);
   let triggerRef = $state<HTMLElement | null>(null);
@@ -63,7 +59,7 @@
     store.errorMsg = "";
     try {
       await createEnvironment(name);
-      flashSuccess(`环境“${name}”已创建`);
+      toastSuccess(`环境“${name}”已创建`);
       createOpen = false;
       modalName = "";
     } catch (error) {
@@ -171,7 +167,7 @@
 
 <style>
   :global(.environment-switcher) {
-    height: 38px;
+    height: 34px;
     max-width: min(220px, 38vw);
     min-width: min(150px, 32vw);
     padding-right: 10px;

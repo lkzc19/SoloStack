@@ -33,7 +33,7 @@ pub async fn get_component_status(
     .await
     .map_err(|e| e.to_string())?;
     Ok(ComponentStatusInfo {
-        status: status_str(&status),
+        status: status.to_wire(),
     })
 }
 
@@ -102,7 +102,7 @@ pub fn list_config_fields(
 ) -> Result<Vec<schema::ConfigFieldValue>, String> {
     let i = resolve(&environment_id, &component)?;
     let _guard = lock::begin_environment_operation(&environment_id)?;
-    component::prepare_config(&i.environment_id, &i.name, &i.version)?;
+    component::config_io::prepare_config(&i.environment_id, &i.name, &i.version)?;
     schema::list_fields(&i.environment_id, &i.name, &i.version)
 }
 
@@ -139,7 +139,7 @@ pub fn get_component_dirs(
             &i.name,
             &i.version,
         ))?,
-        config: component::config_dir(&i.environment_id, &i.name, &i.version)?
+        config: component::config_io::config_dir(&i.environment_id, &i.name, &i.version)?
             .display()
             .to_string(),
         data: to_str(solostack_core::app::paths::var_data_instance_dir(
@@ -173,16 +173,6 @@ pub fn list_component_manifests() -> Result<Vec<ManifestInfo>, String> {
             java_support: m.java_support,
         })
         .collect())
-}
-
-/// 状态枚举 → 前端字符串。
-fn status_str(s: &service::Status) -> String {
-    match s {
-        service::Status::Running => "running".to_string(),
-        service::Status::Stopped => "stopped".to_string(),
-        service::Status::Partial => "partial".to_string(),
-        service::Status::Error(e) => format!("error:{e}"),
-    }
 }
 
 /// 已安装组件（GUI 展示）。

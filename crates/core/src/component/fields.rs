@@ -41,7 +41,7 @@ pub(crate) fn read_java_home(
     version: &str,
 ) -> Option<String> {
     let file = comp.java_env_file()?;
-    let f = super::open_config(environment_id, comp.component(), version, file).ok()?;
+    let f = super::config_io::open_config(environment_id, comp.component(), version, file).ok()?;
     let home = f.get("JAVA_HOME").ok().flatten()?;
     let home = home.trim().to_string();
     if home.is_empty() {

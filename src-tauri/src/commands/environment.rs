@@ -3,7 +3,7 @@
 use solostack_core::app::environment::{self, Environment};
 use solostack_core::app::environment_usage::{self, EnvironmentUsage};
 use solostack_core::component::registry;
-use solostack_core::lifecycle::{environment as environment_lifecycle, lock, service};
+use solostack_core::lifecycle::{environment as environment_lifecycle, lock};
 
 /// 列出全部环境。
 #[tauri::command]
@@ -109,37 +109,32 @@ fn environment_overview(
 ) -> Result<EnvironmentOverview, String> {
     let path = environment::directory(&environment.id)?;
     let usage = environment_usage::measure(&environment.id)?;
+    let is_active = active_id == Some(environment.id.as_str());
+    // 一次扫描进程表，批量求各组件展示状态（非活跃环境直接全 None）
+    let statuses = environment_lifecycle::displayed_component_statuses(&environment, is_active)?;
     let components = environment
         .components
         .iter()
-        .map(|item| EnvironmentComponentOverview {
+        .zip(statuses)
+        .map(|(item, status)| EnvironmentComponentOverview {
             component: item.component.clone(),
             version: item.version.clone(),
             display_name: registry::display_name(&item.component),
             installed_at: item.installed_at.clone(),
-            status: component_status(&environment.id, &item.component, &item.version),
+            status: status.map(|status| status.to_wire()),
         })
         .collect();
 
     Ok(EnvironmentOverview {
         id: environment.id.clone(),
         name: environment.name,
-        active: active_id == Some(environment.id.as_str()),
+        active: is_active,
         path: path.display().to_string(),
         components,
         usage,
         created_at: environment.created_at,
         last_activated_at: environment.last_activated_at,
     })
-}
-
-fn component_status(environment_id: &str, component: &str, version: &str) -> String {
-    match service::component_status(environment_id, component, version) {
-        service::Status::Running => "running".to_string(),
-        service::Status::Stopped => "stopped".to_string(),
-        service::Status::Partial => "partial".to_string(),
-        service::Status::Error(error) => format!("error:{error}"),
-    }
 }
 
 #[derive(serde::Serialize)]
@@ -176,5 +171,6 @@ pub struct EnvironmentComponentOverview {
     version: String,
     display_name: String,
     installed_at: String,
-    status: String,
+    /// 组件状态；非活跃环境为 None（不展示，避免误导）。
+    status: Option<String>,
 }

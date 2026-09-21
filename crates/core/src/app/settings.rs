@@ -253,6 +253,7 @@ mod tests {
         let s = Settings {
             close_to_tray: false,
             show_logs_button: false,
+            show_notifications_button: false,
             environment: EnvironmentSettings {
                 active_id: Some("environment-id".to_string()),
             },
@@ -262,6 +263,7 @@ mod tests {
                 retention_days: 30,
                 max_total_mb: 500,
             },
+            notification: NotificationSettings::default(),
         };
         s.save().unwrap();
 

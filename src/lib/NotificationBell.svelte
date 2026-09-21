@@ -1,20 +1,18 @@
 <script lang="ts">
   import { Bell } from "lucide-svelte";
   import { goto } from "$app/navigation";
-  import { hasUnreadStore } from "$lib/notifications.svelte.ts";
-
-  let hasUnread = $state(false);
-  hasUnreadStore.subscribe((v) => (hasUnread = v));
+  import { unread } from "$lib/notifications.svelte.ts";
 </script>
 
 <button
   class="gear-btn ghost notif-bell"
   onclick={() => goto("/notifications")}
   aria-label="通知"
+  title="通知"
 >
   <span class="icon-wrap">
     <Bell size={16} />
-    {#if hasUnread}
+    {#if unread.value}
       <span class="dot"></span>
     {/if}
   </span>

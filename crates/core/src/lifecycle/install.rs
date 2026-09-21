@@ -78,6 +78,79 @@ impl InstallCancel {
     }
 }
 
+// ── 全局安装会话：同一时刻至多一个安装 ─────────────────
+
+/// 全局会话状态：至多登记一个进行中的取消句柄。
+///
+/// 「同一时刻只允许一个安装」是本项目的业务策略（不追求并行安装），
+/// 因此收口在 core，而非由 UI 命令层各维护一份全局静态量。
+struct SessionState {
+    cancel: Option<Arc<InstallCancel>>,
+}
+
+fn session_state() -> &'static Mutex<SessionState> {
+    static STATE: Mutex<SessionState> = Mutex::new(SessionState { cancel: None });
+    &STATE
+}
+
+/// 一次安装的会话。
+///
+/// 创建时登记全局取消句柄，Drop 时注销 —— 用 RAII 取代命令层「执行完手动
+/// 复位全局变量」的写法，避免异常路径漏清理。
+pub struct InstallSession {
+    cancel: Arc<InstallCancel>,
+}
+
+impl InstallSession {
+    /// 供安装执行体读取取消状态（决定何时中止下载/解压/配置）。
+    pub fn cancel_handle(&self) -> Arc<InstallCancel> {
+        Arc::clone(&self.cancel)
+    }
+}
+
+impl Drop for InstallSession {
+    fn drop(&mut self) {
+        if let Ok(mut state) = session_state().lock() {
+            state.cancel = None;
+        }
+    }
+}
+
+/// 开始一次安装会话；已有进行中的安装时返回错误。
+pub fn begin_install_session() -> Result<InstallSession, String> {
+    let mut state = session_state()
+        .lock()
+        .map_err(|_| "安装会话锁已损坏".to_string())?;
+    if state.cancel.is_some() {
+        return Err("已有安装任务正在执行".to_string());
+    }
+    let cancel = Arc::new(InstallCancel::default());
+    state.cancel = Some(Arc::clone(&cancel));
+    Ok(InstallSession { cancel })
+}
+
+/// 取消当前进行中的安装。
+pub fn cancel_active_install() -> Result<(), String> {
+    let state = session_state()
+        .lock()
+        .map_err(|_| "安装会话锁已损坏".to_string())?;
+    match state.cancel.as_ref() {
+        Some(cancel) => {
+            cancel.cancel("user");
+            Ok(())
+        }
+        None => Err("当前没有进行中的安装".to_string()),
+    }
+}
+
+/// 当前是否有进行中的安装。
+pub fn install_running() -> bool {
+    session_state()
+        .lock()
+        .map(|state| state.cancel.is_some())
+        .unwrap_or(false)
+}
+
 /// 安装一个组件：下载 → 解压 → 生成配置（原子；任一步失败回滚已建产物）。
 ///
 /// 返回实例目录（如 `data_root/components/hadoop/hadoop-3.5.0`）。
@@ -144,7 +217,10 @@ fn install_inner(
         Some(arc) => {
             let arc2 = Arc::clone(arc);
             Some(Box::new(move |bytes, total| {
-                let mut g = arc2.lock().unwrap();
+                // 进度回调锁中毒时仍取回内部数据（不二次 panic，与 core 其余处一致）
+                let mut g = arc2
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 (g.as_mut())(ProgressEvent::Downloading(bytes, total));
             }))
         }
@@ -203,9 +279,10 @@ fn install_inner(
 /// 触发进度回调（无回调时忽略）。
 fn emit(shared: &Option<Arc<Mutex<InstallProgress>>>, ev: ProgressEvent) {
     if let Some(arc) = shared {
-        if let Ok(mut guard) = arc.lock() {
-            (guard.as_mut())(ev);
-        }
+        let mut guard = arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (guard.as_mut())(ev);
     }
 }
 
@@ -214,7 +291,7 @@ fn apply_install(config: &InstallConfig) -> Result<(), String> {
     let name = &config.component;
     let version = &config.version;
     let c = registry::by_component(name).ok_or_else(|| format!("组件 {name} 未注册"))?;
-    crate::component::validate_install_params(name, version, &config.params)?;
+    crate::component::config_io::validate_install_params(name, version, &config.params)?;
     c.apply_install_config(&config.environment_id, version, &config.params)?;
     apply_java_home(config, c)?;
     Ok(())
@@ -242,7 +319,7 @@ fn apply_java_home(
         &config.jdk_version,
     )?;
     let path =
-        crate::component::config_path(&config.environment_id, name, &config.version, env_file)?;
+        crate::component::config_io::config_path(&config.environment_id, name, &config.version, env_file)?;
     let mut plan = crate::config::ConfigPlan::new();
     plan.set(path, "JAVA_HOME", home)?;
     crate::config::apply_plan(&plan)
@@ -338,5 +415,31 @@ mod tests {
             cancel.cancellation_message("安装已取消"),
             "安装已取消：来源 user，阶段 extract"
         );
+    }
+
+    #[test]
+    fn install_session_is_exclusive_cancellable_and_self_cleaning() {
+        use crate::test_util::HOME_LOCK;
+        let _guard = HOME_LOCK.lock().unwrap();
+
+        // 无会话时：未在运行，取消报错
+        assert!(!install_running());
+        assert!(cancel_active_install().is_err());
+
+        // 开始会话：标记运行中，且不允许第二个
+        let session = begin_install_session().unwrap();
+        assert!(install_running());
+        assert!(begin_install_session().is_err());
+
+        // 取消作用于当前会话句柄
+        let handle = session.cancel_handle();
+        assert!(!handle.is_cancelled());
+        cancel_active_install().unwrap();
+        assert!(handle.is_cancelled());
+
+        // Drop 后自动注销，可再次开始
+        drop(session);
+        assert!(!install_running());
+        assert!(begin_install_session().is_ok());
     }
 }

@@ -119,10 +119,20 @@ mod tests {
 
         report_tray_error("测试托盘错误");
 
-        let logs =
-            solostack_core::app::app_log::read_logs_for(&solostack_core::app::app_log::today())
-                .unwrap();
-        assert!(logs.contains("ERROR [-] 测试托盘错误"), "{logs}");
+        let lines = solostack_core::logs::tail(
+            &solostack_core::logs::LogSource::App {
+                date: Some(solostack_core::app::app_log::today()),
+            },
+            20,
+        )
+        .unwrap();
+        assert!(
+            lines.iter().any(|line| {
+                line.level == Some(solostack_core::app::app_log::LogLevel::Error)
+                    && line.message.contains("测试托盘错误")
+            }),
+            "{lines:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

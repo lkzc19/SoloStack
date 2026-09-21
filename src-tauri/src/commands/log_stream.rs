@@ -1,15 +1,16 @@
 //! 实时日志流命令与 Tauri 事件。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
-use solostack_core::app::{id, paths};
-use solostack_core::lifecycle::log_stream::{LogFollower, LogSourceSpec, StreamLine};
+use serde::Serialize;
+use solostack_core::app::id;
+use solostack_core::logs::{LogFollower, LogLine, MAX_TAIL_LINES};
 use tauri::{AppHandle, Emitter};
+
+use super::logs::LogSourceRequest;
 
 const BATCH_EVENT: &str = "logs-stream://batch";
 const STATUS_EVENT: &str = "logs-stream://status";
@@ -18,33 +19,30 @@ const POLL_INTERVAL: Duration = Duration::from_millis(300);
 static STREAMS: LazyLock<Mutex<HashMap<String, StreamControl>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 取流注册表；锁中毒时仍取回内部数据（与 core 的一致做法，不二次 panic）。
+fn stream_registry() -> std::sync::MutexGuard<'static, HashMap<String, StreamControl>> {
+    STREAMS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 struct StreamControl {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum StreamSourceRequest {
-    AppLog,
-    File {
-        path: String,
-        environment_id: Option<String>,
-    },
 }
 
 #[derive(Clone, Serialize)]
 struct LogStreamBatch {
     stream_id: String,
     sequence: u64,
-    records: Vec<StreamLine>,
+    records: Vec<LogLine>,
     dropped: usize,
 }
 
 #[derive(Serialize)]
 pub struct StartLogStreamResponse {
     stream_id: String,
-    records: Vec<StreamLine>,
+    records: Vec<LogLine>,
     offset: u64,
 }
 
@@ -62,7 +60,7 @@ struct LogStreamStatus {
 #[tauri::command]
 pub fn start_log_stream(
     app: AppHandle,
-    sources: Vec<StreamSourceRequest>,
+    sources: Vec<LogSourceRequest>,
     backfill_lines: Option<usize>,
 ) -> Result<StartLogStreamResponse, String> {
     if sources.is_empty() {
@@ -70,13 +68,13 @@ pub fn start_log_stream(
     }
     let sources = sources
         .into_iter()
-        .map(convert_source)
+        .map(LogSourceRequest::resolve)
         .collect::<Result<Vec<_>, _>>()?;
     let mut followers = sources
         .into_iter()
         .map(LogFollower::new)
         .collect::<Vec<_>>();
-    let backfill_lines = backfill_lines.unwrap_or(200).clamp(1, 5_000);
+    let backfill_lines = backfill_lines.unwrap_or(200).clamp(1, MAX_TAIL_LINES);
     let mut initial = Vec::new();
     for follower in &mut followers {
         initial.extend(follower.backfill(backfill_lines)?);
@@ -85,7 +83,7 @@ pub fn start_log_stream(
     let stream_id = id::new_id();
     let stop = Arc::new(AtomicBool::new(false));
     let paused = Arc::new(AtomicBool::new(false));
-    STREAMS.lock().unwrap().insert(
+    stream_registry().insert(
         stream_id.clone(),
         StreamControl {
             stop: Arc::clone(&stop),
@@ -185,9 +183,7 @@ pub fn start_log_stream(
 /// 停止日志流并释放 follower。
 #[tauri::command]
 pub fn stop_log_stream(stream_id: String) -> Result<(), String> {
-    let control = STREAMS
-        .lock()
-        .unwrap()
+    let control = stream_registry()
         .remove(&stream_id)
         .ok_or_else(|| "日志流不存在".to_string())?;
     control.stop.store(true, Ordering::SeqCst);
@@ -197,7 +193,7 @@ pub fn stop_log_stream(stream_id: String) -> Result<(), String> {
 /// 暂停向前端推送，文件 offset 保持不变。
 #[tauri::command]
 pub fn pause_log_stream(stream_id: String) -> Result<(), String> {
-    let streams = STREAMS.lock().unwrap();
+    let streams = stream_registry();
     let control = streams
         .get(&stream_id)
         .ok_or_else(|| "日志流不存在".to_string())?;
@@ -208,37 +204,12 @@ pub fn pause_log_stream(stream_id: String) -> Result<(), String> {
 /// 恢复日志流。
 #[tauri::command]
 pub fn resume_log_stream(stream_id: String) -> Result<(), String> {
-    let streams = STREAMS.lock().unwrap();
+    let streams = stream_registry();
     let control = streams
         .get(&stream_id)
         .ok_or_else(|| "日志流不存在".to_string())?;
     control.paused.store(false, Ordering::SeqCst);
     Ok(())
-}
-
-fn convert_source(source: StreamSourceRequest) -> Result<LogSourceSpec, String> {
-    match source {
-        StreamSourceRequest::AppLog => Ok(LogSourceSpec::AppLog),
-        StreamSourceRequest::File {
-            path,
-            environment_id,
-        } => {
-            let path = PathBuf::from(path);
-            let canonical = path
-                .canonicalize()
-                .map_err(|e| format!("解析日志路径 {} 失败: {e}", path.display()))?;
-            if !paths::is_within_root(&canonical).map_err(|e| e.to_string())? {
-                return Err(format!(
-                    "日志路径超出 SoloStack 数据目录: {}",
-                    canonical.display()
-                ));
-            }
-            Ok(LogSourceSpec::File {
-                path: canonical,
-                environment_id,
-            })
-        }
-    }
 }
 
 fn emit_status(

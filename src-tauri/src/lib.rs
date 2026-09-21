@@ -23,12 +23,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            if let Err(error) = solostack_core::app::migration::migrate_app_layout() {
-                let _ =
-                    solostack_core::app::app_log::error(&format!("旧应用目录迁移失败: {error}"));
-            }
-            if let Err(error) = solostack_core::app::migration::migrate_environment_layout() {
-                let _ = solostack_core::app::app_log::error(&format!("环境目录迁移失败: {error}"));
+            if let Err(error) = solostack_core::app::migration::run() {
+                let _ = solostack_core::app::app_log::error(&format!("旧数据迁移失败: {error}"));
             }
             if let Err(error) = solostack_core::app::environment::ensure_initialized() {
                 let _ = solostack_core::app::app_log::error(&format!("环境初始化失败: {error}"));
@@ -72,8 +68,6 @@ pub fn run() {
             app::get_arch,
             app::get_root_dir,
             app::list_jdk_versions,
-            app::get_app_logs,
-            app::list_log_dates,
             app::get_settings,
             app::set_logging_settings,
             app::set_close_to_tray,
@@ -111,8 +105,8 @@ pub fn run() {
             log_stream::pause_log_stream,
             log_stream::resume_log_stream,
             logs::list_component_logs,
-            logs::read_component_log_tail,
-            logs::query_app_logs,
+            logs::list_app_log_dates,
+            logs::read_log_tail,
             notification::list_notifications,
             notification::notification_count,
             notification::clear_notifications,

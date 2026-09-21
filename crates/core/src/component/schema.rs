@@ -96,7 +96,7 @@ fn component_path(
     version: &str,
     file: &str,
 ) -> Result<std::path::PathBuf, String> {
-    crate::component::config_path(environment_id, component, version, file)
+    crate::component::config_io::config_path(environment_id, component, version, file)
 }
 
 #[cfg(test)]

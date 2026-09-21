@@ -20,7 +20,7 @@ impl Runtime for Kafka {
     }
 
     fn start(&self, environment_id: &str, version: &str) -> Result<(), String> {
-        let conf = component::config_path(environment_id, NAME, version, F_PROPS)?;
+        let conf = component::config_io::config_path(environment_id, NAME, version, F_PROPS)?;
         exec::run_checked(
             environment_id,
             &Kafka,
@@ -79,7 +79,7 @@ fn format_storage_if_needed(environment_id: &str, version: &str) -> Result<(), S
         return Ok(());
     }
 
-    let conf = component::config_path(environment_id, NAME, version, F_PROPS)?;
+    let conf = component::config_io::config_path(environment_id, NAME, version, F_PROPS)?;
     println!("首次使用，格式化 Kafka KRaft 存储...");
     let _ = crate::app::app_log::info(&format!(
         "首次启动 {NAME} v{version}，格式化 KRaft 存储目录"
@@ -129,10 +129,10 @@ mod tests {
     fn setup_fake_instance(tmp: &std::path::Path) {
         std::env::set_var("HOME", tmp);
         let instance = crate::app::paths::instance_dir(ENV_ID, NAME, "4.3.1").unwrap();
-        let config = component::config_dir(ENV_ID, NAME, "4.3.1").unwrap();
+        let config = component::config_io::config_dir(ENV_ID, NAME, "4.3.1").unwrap();
         let bin = instance.join("bin");
         let jdk = tmp.join("fake-jdk");
-        let log_dir = super::super::config::managed_log_dir(ENV_ID, "4.3.1").unwrap();
+        let log_dir = super::super::config::configured_log_dir(ENV_ID, "4.3.1").unwrap();
 
         std::fs::create_dir_all(&config).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
@@ -166,7 +166,7 @@ mod tests {
 
         // 官方产物 meta.properties 存在 → 视为已格式化，不执行任何脚本
         // （此环境下 kafka 二进制并不存在，能返回 Ok 就证明它真的没跑脚本）
-        let log_dir = super::super::config::managed_log_dir(ENV_ID, "4.3.1").unwrap();
+        let log_dir = super::super::config::configured_log_dir(ENV_ID, "4.3.1").unwrap();
         std::fs::create_dir_all(&log_dir).unwrap();
         std::fs::write(log_dir.join("meta.properties"), "version=1\n").unwrap();
         assert!(format_storage_if_needed(ENV_ID, "4.3.1").is_ok());
