@@ -85,16 +85,6 @@ impl LogSource {
     pub fn structured(&self) -> bool {
         matches!(self, LogSource::App { .. })
     }
-
-    /// app 来源的日期（实时来源取今天）；组件来源返回 None。
-    pub fn app_date(&self) -> Option<String> {
-        match self {
-            LogSource::App { date } => {
-                Some(date.clone().unwrap_or_else(app_log::today))
-            }
-            LogSource::Component { .. } => None,
-        }
-    }
 }
 
 /// 列出某组件可查看的日志文件（按修改时间倒序）。
@@ -170,7 +160,10 @@ pub fn validated_component_file(
 /// 路径是否位于该组件实例的日志目录内（词法校验，`..` 显式拒绝）。
 fn is_component_file(environment_id: &str, name: &str, version: &str, path: &Path) -> bool {
     // 词法前缀比较挡不住 `..`，必须显式拒绝
-    if path.components().any(|c| c == std::path::Component::ParentDir) {
+    if path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
         return false;
     }
     paths::var_log_instance_dir(environment_id, name, version)
@@ -182,7 +175,7 @@ fn is_component_file(environment_id: &str, name: &str, version: &str, path: &Pat
 mod tests {
     use super::*;
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     /// 回归：词法前缀比较挡不住 `..`，必须在校验层显式拒绝。
     #[test]
@@ -231,7 +224,8 @@ mod tests {
             validated_component_file(ENV_ID, "hadoop", "3.5.0", &kafka.join("kafka.log")).is_err()
         );
         assert!(
-            validated_component_file(ENV_ID, "hadoop", "3.5.0", &hadoop.join("secret.txt")).is_err()
+            validated_component_file(ENV_ID, "hadoop", "3.5.0", &hadoop.join("secret.txt"))
+                .is_err()
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

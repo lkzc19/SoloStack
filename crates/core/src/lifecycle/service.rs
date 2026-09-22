@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::app::{app_log, paths};
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     fn observation(key: &'static str, state: ServiceState) -> ServiceObservation {
         ServiceObservation {

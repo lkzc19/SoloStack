@@ -204,11 +204,6 @@ pub fn ensure_environment_dirs(environment_id: &str) -> Result<PathBuf, std::io:
     Ok(root)
 }
 
-/// 兼容旧调用：初始化全部应用级目录。
-pub fn ensure_dirs() -> Result<PathBuf, std::io::Error> {
-    ensure_app_dirs()
-}
-
 /// 校验路径位于整个 SoloStack 根目录内。
 pub fn is_within_root(path: &Path) -> Result<bool, std::io::Error> {
     if path
@@ -236,7 +231,7 @@ mod tests {
     use super::*;
 
     fn environment_id() -> &'static str {
-        "00000000-0000-4000-8000-000000000001"
+        "Env00001"
     }
 
     #[test]
@@ -258,8 +253,7 @@ mod tests {
         use crate::test_util::HOME_LOCK;
         let _guard = HOME_LOCK.lock().unwrap();
         let first = instance_dir(environment_id(), "hadoop", "3.5.0").unwrap();
-        let second =
-            instance_dir("00000000-0000-4000-8000-000000000002", "hadoop", "3.5.0").unwrap();
+        let second = instance_dir("Env00002", "hadoop", "3.5.0").unwrap();
         assert_ne!(first, second);
         assert!(first.starts_with(environment_dir(environment_id()).unwrap()));
     }

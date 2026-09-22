@@ -72,7 +72,7 @@ last_activated_at
 核心约束：
 
 - [x] `environment_id` 使用稳定 NanoID，只供代码、目录、接口和日志定位使用。
-- [x] 旧版 UUID 环境 ID 仍可读取，避免升级后数据不可访问。
+- [x] `v0.2.0` 是最低支持版本，不再兼容旧版 UUID 环境 ID。
 - [x] `name` 是用户可见名称，允许重命名；重命名不改变环境 ID，也不移动目录。
 - [x] 同一环境中的 `components` 不允许出现两个相同 `component`。
 - [x] 环境列表通过扫描 `environments/*/environment.json` 生成，不维护全局环境索引。

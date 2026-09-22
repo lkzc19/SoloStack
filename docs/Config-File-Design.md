@@ -355,7 +355,8 @@ fn java_env_file(&self) -> Option<&'static str> { None }
 - `ConfigLifecycle::ensure_config` 默认从「拷贝配置副本」变成「校验布局文件存在」，
   缺失即报错（而不是静默用空配置启动），并提示可重装修复。
 
-迁移：`migration::migrate_app_layout()` 增加清理旧 `etc/` 目录（幂等），并继续清理历史 `installs/`、`snapshots/`、`.templates/`。
+`v0.2.0` 已将当前磁盘布局设为迁移基线，不再支持旧版 `etc/`、`installs/`、
+`snapshots/`、`.templates/` 等历史目录。
 
 ---
 

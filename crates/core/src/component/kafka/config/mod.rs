@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use crate::component::{self, ConfigFieldUpdate, ConfigLifecycle, FieldSchema, InstallParams};
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     fn save_field(id: &str, value: &str) -> Result<(), String> {
         let updates = [ConfigFieldUpdate {

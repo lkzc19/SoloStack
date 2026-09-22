@@ -45,7 +45,7 @@ mod tests {
     }
 
     #[test]
-    fn log_date_parses_all_formats() {
+    fn log_date_parses_current_file_names() {
         assert_eq!(
             store::parse_log_file_name("solostack.log.2026-09-05"),
             Some(("2026-09-05".to_string(), 0))
@@ -53,10 +53,6 @@ mod tests {
         assert_eq!(
             store::parse_log_file_name("solostack.log.2026-09-05.2"),
             Some(("2026-09-05".to_string(), 2))
-        );
-        assert_eq!(
-            store::parse_log_file_name("solostack-2026-09-04.log"),
-            Some(("2026-09-04".to_string(), 0))
         );
         assert_eq!(store::parse_log_file_name("other.log"), None);
     }
@@ -93,40 +89,13 @@ mod tests {
     }
 
     #[test]
-    fn reads_legacy_log_format() {
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = test_home("legacy");
-        let dir = log_dir().unwrap();
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(format!("solostack-{}.log", today())),
-            "[12:00:00] INFO 旧格式日志\n",
-        )
-        .unwrap();
-
-        let lines = crate::logs::tail(
-            &crate::logs::LogSource::App {
-                date: Some(today()),
-            },
-            10,
-        )
-        .unwrap();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].message, "旧格式日志");
-        assert!(!lines[0].raw, "旧文本格式仍应按结构化解析");
-        assert_eq!(lines[0].level, Some(LogLevel::Info));
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
     fn operation_context_is_attached_to_script_logs() {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = test_home("operation");
         let mut settings = settings::Settings::load().unwrap();
         settings.log.level = "debug".to_string();
         settings.save().unwrap();
-        let environment_id = "00000000-0000-4000-8000-000000000001";
+        let environment_id = "Env00001";
         let operation = Operation::begin(environment_id, "启动组件 kafka v4.3.1");
         let trace_id = operation.context().trace_id.clone().unwrap();
         log_script_output(current_context().as_ref(), true, "broker started");
@@ -144,29 +113,13 @@ mod tests {
         assert!(lines
             .iter()
             .all(|line| line.environment_id.as_deref() == Some(environment_id)));
-        assert!(lines.iter().all(|line| line.trace_id.as_deref() == Some(&trace_id)));
-        assert!(lines.iter().any(|line| line.message == "broker started"));
         assert!(lines
             .iter()
-            .any(|line| line.message.contains("操作完成")));
+            .all(|line| line.trace_id.as_deref() == Some(&trace_id)));
+        assert!(lines.iter().any(|line| line.message == "broker started"));
+        assert!(lines.iter().any(|line| line.message.contains("操作完成")));
 
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn legacy_task_id_is_read_as_trace_id() {
-        let record: LogRecord = serde_json::from_str(
-            r#"{
-                "timestamp":"2026-09-14T15:19:01.000+08:00",
-                "level":"info",
-                "source":"app",
-                "event":"operation.begin",
-                "task_id":"start-42-1",
-                "message":"legacy"
-            }"#,
-        )
-        .unwrap();
-        assert_eq!(record.trace_id.as_deref(), Some("start-42-1"));
     }
 
     #[test]
@@ -197,10 +150,7 @@ mod tests {
     fn trace_id_is_nanoid_without_business_context() {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = test_home("trace-id");
-        let operation = Operation::begin(
-            "00000000-0000-4000-8000-000000000001",
-            "开始安装 kafka v4.3.1",
-        );
+        let operation = Operation::begin("Env00001", "开始安装 kafka v4.3.1");
         let trace_id = operation.context().trace_id.as_deref().unwrap();
         assert_eq!(trace_id.len(), 8);
         assert!(trace_id
@@ -217,10 +167,7 @@ mod tests {
     fn cancelled_operation_writes_one_structured_event() {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = test_home("cancelled");
-        let operation = Operation::begin(
-            "00000000-0000-4000-8000-000000000001",
-            "开始安装 kafka v4.3.1",
-        );
+        let operation = Operation::begin("Env00001", "开始安装 kafka v4.3.1");
         operation.finish_cancelled("安装已取消：来源 user，阶段 download");
 
         let lines = crate::logs::tail(
@@ -243,7 +190,7 @@ mod tests {
     fn operation_level_depends_on_explicit_finish_not_message_text() {
         let _guard = HOME_LOCK.lock().unwrap();
         let tmp = test_home("operation-level");
-        let env = "00000000-0000-4000-8000-000000000001";
+        let env = "Env00001";
 
         // 即使文案含「取消」，走 finish 也是 ERROR（不再靠字符串判断）
         Operation::begin(env, "开始 A").finish(&Err::<(), String>("安装已取消".to_string()));
@@ -317,12 +264,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_rotated_parts_are_pruned() {
+    fn rotated_parts_are_pruned() {
         let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = test_home("legacy-rotation");
+        let tmp = test_home("rotation");
         let file = log_file().unwrap();
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(store::rotated_path(&file, 1), "legacy rotated").unwrap();
+        std::fs::write(store::rotated_path(&file, 1), "rotated").unwrap();
         assert!(store::rotated_path(&file, 1).is_file());
 
         let old = log_dir().unwrap().join("solostack.log.2000-01-01");

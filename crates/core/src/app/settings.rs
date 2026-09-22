@@ -4,9 +4,8 @@ use crate::app::paths;
 
 /// 用户设置。
 ///
-/// 配置按领域分组，日志相关字段统一放在 `log` 下。旧版顶层的
-/// `log_viewer` / `log_level` 等字段仍可读取，下一次保存会迁移为新结构。
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// 配置按领域分组，日志相关字段统一放在 `log` 下。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Settings {
     /// 点击关闭按钮时是否仅隐藏窗口并保留托盘进程。
     pub close_to_tray: bool,
@@ -46,7 +45,6 @@ pub struct LogSettings {
     #[serde(default = "default_log_max_total_mb")]
     pub max_total_mb: u64,
 }
-
 
 /// 通知配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,67 +106,6 @@ impl Default for Settings {
     }
 }
 
-/// 兼容旧版扁平字段的读取结构。
-#[derive(Deserialize)]
-struct SettingsWire {
-    #[serde(default = "default_close_to_tray")]
-    close_to_tray: bool,
-    #[serde(default = "default_show_logs_button")]
-    show_logs_button: bool,
-    #[serde(default = "default_show_notifications_button")]
-    show_notifications_button: bool,
-    #[serde(default)]
-    environment: Option<EnvironmentSettings>,
-    #[serde(default)]
-    log: Option<LogSettings>,
-    #[serde(default)]
-    notification: Option<NotificationSettings>,
-    #[serde(default)]
-    log_viewer: Option<String>,
-    #[serde(default)]
-    log_level: Option<String>,
-    #[serde(default)]
-    log_retention_days: Option<u32>,
-    #[serde(default)]
-    log_max_total_mb: Option<u64>,
-}
-
-impl<'de> Deserialize<'de> for Settings {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = SettingsWire::deserialize(deserializer)?;
-        let has_nested_log = wire.log.is_some();
-        let mut log = wire.log.unwrap_or_default();
-
-        // 只有旧格式才用顶层字段覆盖默认值；一旦已有 log，以嵌套结构为准。
-        if !has_nested_log {
-            if let Some(viewer) = wire.log_viewer {
-                log.viewer = viewer;
-            }
-            if let Some(level) = wire.log_level {
-                log.level = level;
-            }
-            if let Some(days) = wire.log_retention_days {
-                log.retention_days = days;
-            }
-            if let Some(max_total_mb) = wire.log_max_total_mb {
-                log.max_total_mb = max_total_mb;
-            }
-        }
-
-        Ok(Self {
-            close_to_tray: wire.close_to_tray,
-            show_logs_button: wire.show_logs_button,
-            show_notifications_button: wire.show_notifications_button,
-            environment: wire.environment.unwrap_or_default(),
-            log,
-            notification: wire.notification.unwrap_or_default(),
-        })
-    }
-}
-
 fn default_log_viewer() -> String {
     "com.apple.TextEdit".to_string()
 }
@@ -218,7 +155,7 @@ impl Settings {
 
     /// 写入 `~/.solostack/app/settings.json`。
     pub fn save(&self) -> Result<(), std::io::Error> {
-        paths::ensure_dirs()?;
+        paths::ensure_app_dirs()?;
         let path = paths::settings_file()?;
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -271,10 +208,6 @@ mod tests {
         assert_eq!(loaded, s);
         let raw = std::fs::read_to_string(tmp.join(".solostack/app/settings.json")).unwrap();
         assert!(raw.contains(r#""log""#), "日志配置应位于 log 对象下");
-        assert!(
-            !raw.contains(r#""log_level""#),
-            "保存后不应继续写旧版扁平字段"
-        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -289,38 +222,6 @@ mod tests {
 
         let s = Settings::load().unwrap();
         assert_eq!(s, Settings::default());
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn load_legacy_flat_settings() {
-        use crate::test_util::HOME_LOCK;
-        let _guard = HOME_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("solostack-settings-legacy-flat");
-        std::env::set_var("HOME", &tmp);
-        let _ = std::fs::remove_dir_all(&tmp);
-
-        let path = paths::settings_file().unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            r#"{
-                "log_viewer": "com.sublimetext.4",
-                "close_to_tray": false,
-                "log_level": "trace",
-                "log_retention_days": 30,
-                "log_max_total_mb": 500
-            }"#,
-        )
-        .unwrap();
-
-        let settings = Settings::load().unwrap();
-        assert!(!settings.close_to_tray);
-        assert_eq!(settings.log.viewer, "com.sublimetext.4");
-        assert_eq!(settings.log.level, "trace");
-        assert_eq!(settings.log.retention_days, 30);
-        assert_eq!(settings.log.max_total_mb, 500);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

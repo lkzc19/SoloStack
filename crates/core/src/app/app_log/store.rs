@@ -48,7 +48,7 @@ pub fn log_file() -> Result<PathBuf, String> {
     log_file_for(&today())
 }
 
-/// 追加一条兼容格式日志。新日志仍写入完整结构化字段。
+/// 追加一条结构化日志。
 pub fn append(level: &str, message: &str) -> Result<(), String> {
     let level = LogLevel::parse(level).unwrap_or(LogLevel::Info);
     log_with_context(level, message, current_context().as_ref())
@@ -248,14 +248,10 @@ pub fn list_log_dates() -> Result<Vec<String>, String> {
     Ok(dates)
 }
 
-/// 指定日期的全部日志分片（旧格式文件、轮转分片、当前文件），读序从旧到新。
+/// 指定日期的全部日志分片（轮转分片、当前文件），读序从旧到新。
 pub fn log_parts_for(date: &str) -> Result<Vec<PathBuf>, String> {
     let base = log_file_for(date)?;
     let mut parts = Vec::new();
-    let legacy = log_dir()?.join(format!("solostack-{date}.log"));
-    if legacy.is_file() {
-        parts.push(legacy);
-    }
     for part in (1..=MAX_ROTATED_FILES).rev() {
         let path = rotated_path(&base, part);
         if path.is_file() {
@@ -268,7 +264,7 @@ pub fn log_parts_for(date: &str) -> Result<Vec<PathBuf>, String> {
     Ok(parts)
 }
 
-/// 从文件名解析日期和分片号（兼容 `solostack.log.<date>[.<part>]` 与旧命名）。
+/// 从文件名解析日期和分片号：`solostack.log.<date>[.<part>]`。
 pub(super) fn parse_log_file_name(name: &str) -> Option<(String, u32)> {
     if let Some(rest) = name.strip_prefix("solostack.log.") {
         let date = rest.get(..10)?;
@@ -278,11 +274,6 @@ pub(super) fn parse_log_file_name(name: &str) -> Option<(String, u32)> {
             Some(value) => value.strip_prefix('.')?.parse().ok()?,
         };
         return Some((date.to_string(), part));
-    }
-    if let Some(rest) = name.strip_prefix("solostack-") {
-        let date = rest.strip_suffix(".log")?;
-        NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
-        return Some((date.to_string(), 0));
     }
     None
 }

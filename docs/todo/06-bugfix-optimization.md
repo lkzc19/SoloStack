@@ -91,8 +91,8 @@ cancel_active_install, install_running}`：会话创建时登记全局取消句�
 **建议**：拆成 `log/{record,store,query,redact}.rs`。纯可维护性，不阻塞功能。
 
 **修复状态**：✅ 已修复  
-`app_log.rs` 拆为 `app_log/` 下 5 个模块：`record`（数据模型）、`store`
-（写入/分片/轮转/清理）、`query`（查询与旧格式兼容）、`redact`（脱敏）、
+`app_log.rs` 拆为 `app_log/` 下 4 个模块：`record`（数据模型）、`store`
+（写入/分片/轮转/清理）、`redact`（脱敏）、
 `operation`（操作作用域）。`app_log.rs` 变为薄门面：模块声明 + `pub use`
 re-export + 跨模块集成测试（988 行 → 实现分散，单文件均 < 300 行）。  
 对外 API 路径不变（`app_log::*`），调用方零改动。
@@ -108,19 +108,13 @@ re-export + 跨模块集成测试（988 行 → 实现分散，单文件均 < 30
 **建议**：迁移天然是历史兼容的例外，可保留，但应在 `app/mod.rs` 文档中显式
 标注这一例外；体量与 CODE-03 同属大文件问题。
 
-**修复状态**：✅ 已修复  
-`migration.rs` 拆为 `migration/` 下 5 个子模块：`app_layout`（应用级目录迁移）、
-`environment_layout`（旧 components/var → 环境目录，编排 + 分组）、`legacy`
-（旧实例扫描）、`recovery`（失败回滚与 staging 恢复）、`fs_ops`（移动原语）；
-`migration.rs` 变为门面（模块声明 + re-export + 集成测试）。  
-在 `app/mod.rs` 与 `migration.rs` 文档中显式标注「分层例外」：迁移是 app 层唯一
-了解组件实例磁盘布局的地方，属历史兼容的刻意例外。
+**修复状态**：✅ 已修复，后续按最低支持版本收敛
+最终确认 `v0.2.0` 是最低支持版本，因此删除旧 `components/`、`var/` 等历史布局迁移
+实现，不再保留 `app_layout`、`environment_layout`、`legacy`、`recovery`、`fs_ops`。
 
-另加版本门控：入口 `migration::run` 读 `~/.solostack/.migration-version`，按 `STEPS`
-表依次执行「当前版本 < 目标版本」的步骤；成功后才写回版本，失败保留旧版本下次重试。
-版本号是**数据布局版本**（手动 +1），与 app release 版本解耦；新增布局变更时在
-`STEPS` 末尾追加一行。数据版本高于程序支持时直接报错（降级保护）。
-新增测试：`version_gate_migrates_once_then_skips`、`rejects_data_newer_than_program`。
+保留轻量版本门控：入口 `migration::run` 读取 `~/.solostack/.migration-version`，
+当前布局基线为 `1`，`STEPS` 为空；未来布局变化时再追加具体迁移步骤。数据版本高于
+程序支持时仍直接报错，保留降级保护。
 
 ## CODE-05：组件 `config.rs` 接近 800 行
 

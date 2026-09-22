@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::model::LogLine;
 use super::source::LogSource;
-use crate::app::app_log::{LogLevel, LogRecord};
+use crate::app::app_log::LogRecord;
 
 const MAX_PARTIAL_LINE_BYTES: usize = 1024 * 1024;
 /// tail / backfill 的行数上限（IPC 传入值不可信，core 兜底）。
@@ -177,9 +177,7 @@ impl LogFollower {
         while let Some(position) = self.partial.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = self.partial.drain(..=position).collect();
             let text = String::from_utf8_lossy(&line);
-            if let Some(parsed) =
-                parse_line(text.trim_end_matches(['\r', '\n']), &self.source)
-            {
+            if let Some(parsed) = parse_line(text.trim_end_matches(['\r', '\n']), &self.source) {
                 lines.push(parsed);
             }
         }
@@ -202,8 +200,7 @@ impl LogFollower {
 
 /// 一行文本 → `LogLine`。
 ///
-/// 结构化来源（app）优先按 JSONL 解析，其次兼容旧 `[time] LEVEL message` 文本，
-/// 都不匹配则按原始行；组件来源直接按原始行。
+/// 结构化来源（app）按 JSONL 解析，解析失败则按原始行；组件来源直接按原始行。
 fn parse_line(line: &str, source: &LogSource) -> Option<LogLine> {
     if line.trim().is_empty() {
         return None;
@@ -212,11 +209,6 @@ fn parse_line(line: &str, source: &LogSource) -> Option<LogLine> {
         if let Ok(record) = serde_json::from_str::<LogRecord>(line) {
             return Some(LogLine::from_record(record));
         }
-        if let Some(date) = source.app_date() {
-            if let Some(legacy) = parse_legacy(line, &date) {
-                return Some(legacy);
-            }
-        }
     }
     Some(LogLine::raw(
         line.to_string(),
@@ -224,27 +216,13 @@ fn parse_line(line: &str, source: &LogSource) -> Option<LogLine> {
     ))
 }
 
-/// 旧文本格式：`[HH:MM:SS] LEVEL message`。
-fn parse_legacy(line: &str, date: &str) -> Option<LogLine> {
-    let (time, rest) = line.strip_prefix('[')?.split_once("] ")?;
-    let (level, message) = rest.split_once(' ')?;
-    Some(LogLine {
-        timestamp: Some(format!("{date}T{time}")),
-        level: Some(LogLevel::parse(level)?),
-        trace_id: None,
-        environment_id: None,
-        message: message.to_string(),
-        raw: false,
-    })
-}
-
 /// 从文件尾部反向读取：返回「完整区域」与「结尾未换行的半行」。
 ///
 /// 每凑够一块就检查是否已有 `max_lines` 条非空行，够就停；总量再受
 /// `MAX_BACKFILL_BYTES` 约束。两者保证读一个大日志时内存有界。
 fn read_tail_bytes(path: &Path, max_lines: usize) -> Result<(Vec<u8>, Vec<u8>), String> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("读取日志 {} 失败: {e}", path.display()))?;
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("读取日志 {} 失败: {e}", path.display()))?;
     let len = file
         .metadata()
         .map_err(|e| format!("读取日志元数据 {} 失败: {e}", path.display()))?
@@ -313,7 +291,7 @@ mod tests {
     use crate::test_util::HOME_LOCK;
     use std::io::Write;
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     fn setup(name: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(format!("solostack-logs-reader-{name}"));
@@ -365,7 +343,13 @@ mod tests {
         )
         .unwrap();
 
-        let lines = tail(&LogSource::App { date: Some(date.clone()) }, 10).unwrap();
+        let lines = tail(
+            &LogSource::App {
+                date: Some(date.clone()),
+            },
+            10,
+        )
+        .unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].message, "hello");
         assert!(!lines[0].raw);
@@ -510,8 +494,8 @@ mod tests {
         let dir = crate::app::paths::app_log_dir().unwrap();
         std::fs::create_dir_all(&dir).unwrap();
         let today = crate::app::app_log::today();
-        // 旧版遗留的轮转分片 `.1` 不应被当成"当前文件"（当前文件是分片号 0 的 base）
-        std::fs::write(dir.join(format!("solostack.log.{today}.1")), "legacy\n").unwrap();
+        // 轮转分片 `.1` 不应被当成当前文件（当前文件是分片号 0 的 base）
+        std::fs::write(dir.join(format!("solostack.log.{today}.1")), "rotated\n").unwrap();
         let base = dir.join(format!("solostack.log.{today}"));
         std::fs::write(&base, "current\n").unwrap();
 

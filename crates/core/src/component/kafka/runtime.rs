@@ -124,7 +124,7 @@ fn format_storage_if_needed(environment_id: &str, version: &str) -> Result<(), S
 mod tests {
     use super::*;
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     fn setup_fake_instance(tmp: &std::path::Path) {
         std::env::set_var("HOME", tmp);

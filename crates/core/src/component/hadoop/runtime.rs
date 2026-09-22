@@ -235,7 +235,7 @@ fn run_daemon(
 mod tests {
     use super::*;
 
-    const ENV_ID: &str = "00000000-0000-4000-8000-000000000001";
+    const ENV_ID: &str = "Env00001";
 
     /// 铺一份最小实例：官方配置文件存在（hdfs-site.xml 可选写自定义 name dir）。
     /// 调用方需持有 HOME_LOCK。

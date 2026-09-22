@@ -152,8 +152,8 @@ crates/core/src/logs/
 
 - [x] 读取侧统一到 `crates/core/src/logs/`：`LogSource` + `tail`/`LogFollower`
       一份实现，app 与组件共用。
-- [x] 行解析一份：JSONL → `LogLine`，兼容旧 `[time] LEVEL message` 文本，其余
-      按原始行（`raw = true`）。
+- [x] 行解析一份：app JSONL → `LogLine`，解析失败或组件日志按原始行
+      （`raw = true`）。
 - [x] 路径守卫收成一处（`logs::validated_component_file`），删除命令层重复校验。
 - [x] `app_log` 退回生产者：保留写入 / 轮转 / 保留策略 / `Operation` / 脱敏，
       移除读取（`query.rs`）。

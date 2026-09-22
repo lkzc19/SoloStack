@@ -209,7 +209,7 @@ mod tests {
         // 环境文件不存在时走 manifest / 本机 JDK 回退；
         // 本机没有任何 JDK 时允许报错，但不得 panic
         let kafka = registry::by_component("kafka").expect("kafka 应已注册");
-        let r = resolve_java_home("00000000-0000-4000-8000-000000000001", kafka, "4.3.1");
+        let r = resolve_java_home("Env00001", kafka, "4.3.1");
         if let Ok(home) = r {
             assert!(!home.is_empty());
         }

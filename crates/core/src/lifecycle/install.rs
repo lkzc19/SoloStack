@@ -218,9 +218,7 @@ fn install_inner(
             let arc2 = Arc::clone(arc);
             Some(Box::new(move |bytes, total| {
                 // 进度回调锁中毒时仍取回内部数据（不二次 panic，与 core 其余处一致）
-                let mut g = arc2
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut g = arc2.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 (g.as_mut())(ProgressEvent::Downloading(bytes, total));
             }))
         }
@@ -279,9 +277,7 @@ fn install_inner(
 /// 触发进度回调（无回调时忽略）。
 fn emit(shared: &Option<Arc<Mutex<InstallProgress>>>, ev: ProgressEvent) {
     if let Some(arc) = shared {
-        let mut guard = arc
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = arc.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         (guard.as_mut())(ev);
     }
 }
@@ -318,8 +314,12 @@ fn apply_java_home(
         &config.version,
         &config.jdk_version,
     )?;
-    let path =
-        crate::component::config_io::config_path(&config.environment_id, name, &config.version, env_file)?;
+    let path = crate::component::config_io::config_path(
+        &config.environment_id,
+        name,
+        &config.version,
+        env_file,
+    )?;
     let mut plan = crate::config::ConfigPlan::new();
     plan.set(path, "JAVA_HOME", home)?;
     crate::config::apply_plan(&plan)
@@ -377,7 +377,7 @@ mod tests {
 
     fn test_config() -> InstallConfig {
         InstallConfig {
-            environment_id: "00000000-0000-4000-8000-000000000001".into(),
+            environment_id: "Env00001".into(),
             component: "hadoop".into(),
             version: "3.5.0".into(),
             source_id: "清华源".into(),

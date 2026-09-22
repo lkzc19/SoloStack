@@ -46,11 +46,7 @@ impl LogLevel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogRecord {
     pub timestamp: String,
-    #[serde(
-        rename = "trace_id",
-        alias = "task_id",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "trace_id", skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     pub level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]

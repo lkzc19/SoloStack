@@ -100,12 +100,7 @@ mod tests {
     #[test]
     fn prepare_unknown_component_is_noop() {
         // 未注册组件优雅降级：不 panic、不建目录，由上层给出「不支持的组件」
-        assert!(prepare_config(
-            "00000000-0000-4000-8000-000000000001",
-            "no-such-component",
-            "0.0.0"
-        )
-        .is_ok());
+        assert!(prepare_config("Env00001", "no-such-component", "0.0.0").is_ok());
     }
 
     #[test]
@@ -132,7 +127,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("solostack-component-path");
         std::env::set_var("HOME", &tmp);
 
-        let environment_id = "00000000-0000-4000-8000-000000000001";
+        let environment_id = "Env00001";
         let p = config_path(environment_id, "hadoop", "3.5.0", "hdfs-site.xml").unwrap();
         assert_eq!(
             p,

@@ -111,7 +111,7 @@ mod tests {
         std::env::set_var("HOME", &tmp);
         let _ = std::fs::remove_dir_all(&tmp);
 
-        let environment_id = "00000000-0000-4000-8000-000000000001";
+        let environment_id = "Env00001";
         let fields = list_fields(environment_id, "hadoop", "3.5.0").unwrap();
         assert_eq!(fields.len(), 5);
         assert_eq!(fields[0].id, "namenode_web_port");

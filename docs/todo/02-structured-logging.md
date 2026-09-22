@@ -72,7 +72,7 @@ message
 - [x] 持久化格式使用 JSON Lines。
 - [x] GUI 读取结构后自行格式化，不额外维护一份文本日志。
 - [x] 只保存时间、`trace_id`、级别、环境和消息五个字段。
-- [x] 旧日志中的 `task_id` 读取时映射为 `trace_id`，新日志不再写 `task_id`。
+- [x] `v0.2.0` 只读取当前 `trace_id` 格式，不再兼容旧 `task_id` 字段。
 - [x] `trace_id` 使用 8 位 NanoID，不包含组件、版本或操作等业务含义。
 
 ---
